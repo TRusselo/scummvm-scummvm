@@ -57,6 +57,15 @@ int retro_setting_get_gui_res_h(void);
 
 void retro_set_size(unsigned width, unsigned height);
 
+/**
+ * Advances the libretro savestate bridge's internal state machine by one
+ * step. Called from OSystem_libretro::pollEvent() so it runs on the emu
+ * thread, where it's safe to touch g_engine -- see the implementation in
+ * libretro-core.cpp (next to retro_serialize()/retro_unserialize()) for the
+ * full explanation of why this can't just be called directly from those.
+ */
+void retro_process_pending_savestate_op(void);
+
 uint8 retro_get_video_hw_mode(void);
 #ifdef USE_OPENGL
 uintptr_t retro_get_hw_fb(void);

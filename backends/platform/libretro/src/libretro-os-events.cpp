@@ -32,6 +32,7 @@
 
 bool OSystem_libretro::pollEvent(Common::Event &event) {
 	((LibretroTimerManager *)_timerManager)->checkThread(THREAD_SWITCH_POLL);
+	retro_process_pending_savestate_op();
 	if (!_events.empty()) {
 		event = _events.front();
 		_events.pop_front();

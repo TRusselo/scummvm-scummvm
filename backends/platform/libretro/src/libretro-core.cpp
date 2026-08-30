@@ -23,6 +23,9 @@
 #include "common/str.h"
 #include "common/fs.h"
 #include "common/error.h"
+#include "common/array.h"
+#include "common/savefile.h"
+#include "engines/engine.h"
 #include "streams/file_stream.h"
 #include <file/file_path.h>
 #include <retro_dirent.h>
@@ -1353,14 +1356,212 @@ void *retro_get_memory_data(unsigned type) {
 size_t retro_get_memory_size(unsigned type) {
 	return 0;
 }
+
+/*
+ * Save-state bridge.
+ *
+ * ScummVM has no API to serialize a running engine's state into a memory
+ * buffer -- Engine::saveGameState()/loadGameState() only know how to read
+ * and write named slots via the SaveFileManager. So retro_serialize() and
+ * retro_unserialize() are implemented by driving a *real* engine save/load
+ * into a reserved slot, then copying that slot's save file bytes to/from
+ * the buffer libretro gives us. This reuses the exact same save mechanism
+ * as ScummVM's own in-game "Save"/"Load" menu (which already works, and
+ * whose saves already persist across a reload) -- retro_serialize just
+ * makes that mechanism reachable through EmulatorJS's/RetroArch's own
+ * save-state UI (Save State, Exit & Save) instead of requiring the GMM.
+ *
+ * retro_serialize()/retro_unserialize() are called by the frontend from
+ * what this backend calls the "main" thread -- see libretro-threads.cpp.
+ * g_engine and everything reachable from it belong to the "emu thread",
+ * which is a real pthread parked wherever the running engine last yielded
+ * (see retro_switch_to_emu_thread()/retro_switch_to_main_thread()); it is
+ * NOT safe to call g_engine->saveGameState()/loadGameState() directly from
+ * here. Instead we set a pending-operation flag, drive the emu thread
+ * forward with retro_switch_to_emu_thread() (exactly as retro_run() does
+ * once per frame), and let retro_process_pending_savestate_op() -- called
+ * from OSystem_libretro::pollEvent(), which runs on the emu thread --
+ * actually do the work and report back.
+ *
+ * A further wrinkle: some engines' saveGameState()/loadGameState() (e.g.
+ * SCUMM's) don't do the file I/O synchronously -- they just arm an
+ * internal flag for their own main loop to act on later (see
+ * Engine::isSaveOrLoadPending()). retro_process_pending_savestate_op()
+ * accounts for this by waiting for isSaveOrLoadPending() to clear before
+ * treating the request as finished, which may take more than one
+ * pollEvent() call.
+ */
+
+// Slot 0 is generally the autosave slot, and SCUMM treats slot 100 as a
+// special temporary-restart slot (see ScummEngine::requestLoad) -- 200 is
+// comfortably outside both the autosave slot and SCUMM's normal UI-visible
+// save slot range (0-99, see ScummMetaEngine::getMaximumSaveSlot()).
+// Must also fit in a byte: ScummEngine::_saveLoadSlot (scumm.h) is declared
+// `byte`, so a slot >255 (990 was tried first) silently truncates mod 256
+// -- SCUMM actually wrote and read a completely different slot than the one
+// this code asked for and later tried to read back, with no error anywhere
+// in the chain to indicate the mismatch.
+static const int LIBRETRO_SAVESTATE_SLOT = 200;
+
+// A fixed upper bound, not an exact size: libretro cores are not required
+// to report an exact serialized size, only one big enough to hold the
+// largest state they'll ever produce (see the libretro API docs for
+// retro_serialize_size()). The actual payload length is written as a
+// 4-byte header in front of the real save bytes -- see retro_serialize()/
+// retro_unserialize() below -- so the unused remainder is never read back.
+static const size_t LIBRETRO_SAVESTATE_MAX_SIZE = 8 * 1024 * 1024;
+
+// Generous bound on how many times retro_serialize()/retro_unserialize()
+// will resume the emu thread while waiting for a request to finish, before
+// giving up and reporting failure rather than hanging the frontend forever.
+static const int LIBRETRO_SAVESTATE_MAX_SWITCHES = 600;
+
+enum LibretroSaveOp {
+	LIBRETRO_SAVEOP_NONE,
+	LIBRETRO_SAVEOP_SAVE,
+	LIBRETRO_SAVEOP_LOAD
+};
+
+static LibretroSaveOp s_pendingSaveOp = LIBRETRO_SAVEOP_NONE;
+static bool s_saveOpArmed = false;
+static bool s_saveOpSucceeded = false;
+static Common::Array<byte> s_saveStateBytes;
+
+void retro_process_pending_savestate_op(void) {
+	if (s_pendingSaveOp == LIBRETRO_SAVEOP_NONE)
+		return;
+
+	if (!g_engine) {
+		s_saveOpSucceeded = false;
+		s_pendingSaveOp = LIBRETRO_SAVEOP_NONE;
+		return;
+	}
+
+	// Wait for any save/load already in flight (ours, once armed below; or,
+	// in principle, an autosave that happened to be running) to finish
+	// before touching the engine's save/load request slot.
+	if (g_engine->isSaveOrLoadPending())
+		return;
+
+	if (!s_saveOpArmed) {
+		Common::Error err;
+		if (s_pendingSaveOp == LIBRETRO_SAVEOP_SAVE) {
+			err = g_engine->saveGameState(LIBRETRO_SAVESTATE_SLOT, "libretro savestate");
+		} else {
+			Common::OutSaveFile *f = g_system->getSavefileManager()->openForSaving(g_engine->getSaveStateName(LIBRETRO_SAVESTATE_SLOT));
+			if (!f) {
+				s_saveOpSucceeded = false;
+				s_pendingSaveOp = LIBRETRO_SAVEOP_NONE;
+				return;
+			}
+			f->write(s_saveStateBytes.data(), s_saveStateBytes.size());
+			f->finalize();
+			bool writeOk = !f->err();
+			delete f;
+			if (!writeOk) {
+				s_saveOpSucceeded = false;
+				s_pendingSaveOp = LIBRETRO_SAVEOP_NONE;
+				return;
+			}
+			err = g_engine->loadGameState(LIBRETRO_SAVESTATE_SLOT);
+		}
+
+		if (err.getCode() != Common::kNoError) {
+			s_saveOpSucceeded = false;
+			s_pendingSaveOp = LIBRETRO_SAVEOP_NONE;
+			return;
+		}
+
+		s_saveOpArmed = true;
+
+		// Deferred engines (e.g. SCUMM) have only armed their internal flag at
+		// this point; wait for a later call to see it clear. Engines whose
+		// saveGameState()/loadGameState() do the I/O synchronously (the
+		// Engine base class default) already report nothing pending -- fall
+		// straight through and finish now instead of waiting an extra round trip.
+		if (g_engine->isSaveOrLoadPending())
+			return;
+	}
+
+	if (s_pendingSaveOp == LIBRETRO_SAVEOP_SAVE) {
+		Common::InSaveFile *f = g_system->getSavefileManager()->openForLoading(g_engine->getSaveStateName(LIBRETRO_SAVESTATE_SLOT));
+		if (f) {
+			s_saveStateBytes.resize(f->size());
+			f->read(s_saveStateBytes.data(), s_saveStateBytes.size());
+			delete f;
+			s_saveOpSucceeded = true;
+		} else {
+			s_saveOpSucceeded = false;
+		}
+	} else {
+		// loadGameState() reporting kNoError only means the request was
+		// accepted, not that the load actually succeeded (see the comment on
+		// Engine::isSaveOrLoadPending()) -- a genuinely corrupt/incompatible
+		// save may still surface as an in-engine error dialog rather than an
+		// error retro_unserialize() can observe. Treating "request finished"
+		// as success here matches how libretro frontends already use this
+		// API elsewhere: best-effort, not a strict guarantee.
+		s_saveOpSucceeded = true;
+	}
+
+	s_saveOpArmed = false;
+	s_pendingSaveOp = LIBRETRO_SAVEOP_NONE;
+}
+
 size_t retro_serialize_size(void) {
-	return 0;
+	if (!g_engine)
+		return 0;
+	return LIBRETRO_SAVESTATE_MAX_SIZE;
 }
+
 bool retro_serialize(void *data, size_t size) {
-	return false;
+	if (!g_engine || !data || size < sizeof(uint32))
+		return false;
+
+	s_pendingSaveOp = LIBRETRO_SAVEOP_SAVE;
+	s_saveOpArmed = false;
+	s_saveOpSucceeded = false;
+	s_saveStateBytes.clear();
+
+	// Drive the emu thread forward (exactly as retro_run() does once per
+	// frame) until retro_process_pending_savestate_op(), called from
+	// pollEvent() on the emu thread, finishes the request.
+	for (int i = 0; s_pendingSaveOp != LIBRETRO_SAVEOP_NONE && i < LIBRETRO_SAVESTATE_MAX_SWITCHES; i++)
+		retro_switch_to_emu_thread();
+
+	if (s_pendingSaveOp != LIBRETRO_SAVEOP_NONE || !s_saveOpSucceeded)
+		return false;
+
+	uint32 payloadSize = (uint32)s_saveStateBytes.size();
+	if (sizeof(payloadSize) + (size_t)payloadSize > size)
+		return false;
+
+	memset(data, 0, size);
+	memcpy(data, &payloadSize, sizeof(payloadSize));
+	memcpy((byte *)data + sizeof(payloadSize), s_saveStateBytes.data(), payloadSize);
+	return true;
 }
+
 bool retro_unserialize(const void *data, size_t size) {
-	return false;
+	if (!g_engine || !data || size < sizeof(uint32))
+		return false;
+
+	uint32 payloadSize;
+	memcpy(&payloadSize, data, sizeof(payloadSize));
+	if (sizeof(payloadSize) + (size_t)payloadSize > size)
+		return false;
+
+	s_saveStateBytes.resize(payloadSize);
+	memcpy(s_saveStateBytes.data(), (const byte *)data + sizeof(payloadSize), payloadSize);
+
+	s_pendingSaveOp = LIBRETRO_SAVEOP_LOAD;
+	s_saveOpArmed = false;
+	s_saveOpSucceeded = false;
+
+	for (int i = 0; s_pendingSaveOp != LIBRETRO_SAVEOP_NONE && i < LIBRETRO_SAVESTATE_MAX_SWITCHES; i++)
+		retro_switch_to_emu_thread();
+
+	return s_pendingSaveOp == LIBRETRO_SAVEOP_NONE && s_saveOpSucceeded;
 }
 void retro_cheat_reset(void) {}
 void retro_cheat_set(unsigned unused, bool unused1, const char *unused2) {}
