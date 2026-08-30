@@ -509,6 +509,20 @@ public:
 	virtual Common::Error saveGameStream(Common::WriteStream *stream, bool isAutosave = false);
 
 	/**
+	 * Indicate whether a save or load requested via saveGameState()/loadGameState()
+	 * has not yet actually completed.
+	 *
+	 * Most engines' base saveGameState()/loadGameState() perform the file I/O
+	 * synchronously, so by the time they return there is nothing left pending.
+	 * Some engines (e.g. SCUMM) instead only arm an internal flag and defer the
+	 * actual save/load to a later point in their own main loop -- callers that
+	 * need to know when a request has truly finished (for example, a libretro
+	 * frontend bridging its own save-state API to this one, see
+	 * backends/platform/libretro) must poll this until it returns false again.
+	 */
+	virtual bool isSaveOrLoadPending() const { return false; }
+
+	/**
 	 * Indicate whether a game state can be saved.
 	 *
 	 * @param msg        Optional pointer to message explaining why it is disabled

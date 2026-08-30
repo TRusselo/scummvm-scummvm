@@ -603,6 +603,9 @@ public:
 	Common::Error saveGameState(int slot, const Common::String &desc, bool isAutosave = false) override;
 	bool canSaveGameStateCurrently(Common::U32String *msg = nullptr) override;
 	Common::String getSaveStateName(int slot) const override { return makeSavegameName(slot, false); }
+	// loadGameState()/saveGameState() only arm _saveLoadFlag; the file I/O
+	// happens later in scummLoop_handleSaveLoad().
+	bool isSaveOrLoadPending() const override { return _saveLoadFlag != 0; }
 
 	void pauseEngineIntern(bool pause) override;
 
