@@ -1168,7 +1168,27 @@ bool retro_load_game(const struct retro_game_info *game) {
 		game_buf.path = game_buf_path;
 		// Retrieve the game path.
 		Common::FSNode detect_target = Common::FSNode(game->path);
+#ifdef EMSCRIPTEN
+		// In this WASM/EmulatorJS deployment, the virtual filesystem root
+		// ("/") is always exactly the current ROM's fully-extracted content
+		// tree -- EmulatorJS's downloadRom() extracts every zip entry
+		// preserving its relative path under "/", and nothing else is ever
+		// mounted there for this core. Scanning from the anchor file's own
+		// parent directory (the upstream default below, correct for a real
+		// shared filesystem where many games' content might coexist in
+		// sibling folders) is an unnecessary restriction here: it makes
+		// detection depend on which arbitrary file EmulatorJS's
+		// fileNames[0] heuristic happened to pick as game->path, breaking
+		// any ROM whose zip doesn't happen to have its detection-relevant
+		// anchor at the true top level. Using the true root instead lets
+		// ScummVM's own directoryGlobs-based scan (already correct on
+		// desktop platforms) work for any packaging. Guarded to this WASM
+		// build only -- on a native build of this shared source, "/" is the
+		// real OS root and this override would be wrong.
+		Common::FSNode parent_dir = Common::FSNode(Common::Path("/"));
+#else
 		Common::FSNode parent_dir = detect_target.getParent();
+#endif
 		char target_id[400] = {0};
 		char buffer[400] = {0};
 		int test_game_status = TEST_GAME_KO_NOT_FOUND;
