@@ -799,8 +799,33 @@ static void exit_to_frontend(void) {
 	environ_cb(RETRO_ENVIRONMENT_SHUTDOWN, NULL);
 }
 
+// Bound on how many times close_emu_thread() will re-request a quit and
+// resume the emulator thread before giving up. Each iteration costs one
+// thread timeslice, so this is roughly a five second grace period.
+static const int LIBRETRO_QUIT_MAX_SWITCHES = 600;
+
 static void close_emu_thread(void) {
+	// This loop used to be unbounded. Every iteration pushes another
+	// EVENT_QUIT and hands the emulator thread a timeslice, waiting for the
+	// engine to observe the event and return from scummvm_main(). An engine
+	// that keeps yielding but never observes the quit spins here forever,
+	// and because this runs on the frontend's own thread the whole browser
+	// tab locks up with nothing logged. Griffon does exactly that: its
+	// checkInputs() returns early while _attacking or _forcePause is set,
+	// and that early return sits above its EVENT_QUIT check, so the event is
+	// discarded (upstream ScummVM has the same ordering). Give up after a
+	// bounded number of attempts and tear down anyway -- a leaked engine
+	// thread on a core that is being unloaded is far cheaper than a hung
+	// tab. Mirrors LIBRETRO_SAVESTATE_MAX_SWITCHES in the save-state bridge.
+	int switches = 0;
 	while (retro_emu_thread_started() && !retro_emu_thread_exited()) {
+		if (switches++ >= LIBRETRO_QUIT_MAX_SWITCHES) {
+			if (retro_log_cb)
+				retro_log_cb(RETRO_LOG_WARN,
+					"[scummvm] engine did not acknowledge quit after %d attempts; forcing teardown\n",
+					LIBRETRO_QUIT_MAX_SWITCHES);
+			break;
+		}
 		LIBRETRO_G_SYSTEM->requestQuit();
 		retro_switch_to_emu_thread();
 	}

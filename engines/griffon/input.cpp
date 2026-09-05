@@ -65,13 +65,20 @@ void GriffonEngine::checkInputs() {
 		}
 	}
 
-	if (_attacking || (_forcePause && !_itemSelOn))
-		return;
-
+	// Check for quit BEFORE the _attacking/_forcePause early return below.
+	// With the order reversed, a quit arriving while the player is mid-attack
+	// or the game is force-paused was discarded entirely, so the engine never
+	// left its main loop. On a normal desktop build the window manager closes
+	// the window anyway and the dropped event goes unnoticed; on the libretro
+	// backend the frontend waits for the engine to acknowledge the quit, so
+	// the dropped event hung shutdown outright.
 	if (_event.type == Common::EVENT_QUIT || _event.type == Common::EVENT_RETURN_TO_LAUNCHER) {
 		_shouldQuit = true;
 		return;
 	}
+
+	if (_attacking || (_forcePause && !_itemSelOn))
+		return;
 
 	if (_event.type == Common::EVENT_CUSTOM_ENGINE_ACTION_START) {
 		if (_event.customType == kGriffonMenu) {
