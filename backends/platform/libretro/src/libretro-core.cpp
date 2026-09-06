@@ -99,6 +99,7 @@ char cmd_params_num;
 
 static uint8 video_hw_mode = 0;
 
+static char render_mode_setting[16] = "default";
 static unsigned base_width = RES_W_OVERLAY;
 static unsigned base_height = RES_H_OVERLAY;
 static unsigned gui_width = RES_W_OVERLAY;
@@ -592,6 +593,11 @@ static void update_variables(void) {
 		av_status |= new_gui_height != gui_height && LIBRETRO_G_SYSTEM && LIBRETRO_G_SYSTEM->inLauncher() ? AV_STATUS_UPDATE_GUI : 0;
 		gui_height = new_gui_height;
 	}
+
+	var.key = "scummvm_render_mode";
+	var.value = NULL;
+	if (environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var) && var.value)
+		snprintf(render_mode_setting, sizeof(render_mode_setting), "%s", var.value);
 
 	var.key = "scummvm_gui_aspect_ratio";
 	var.value = NULL;
@@ -1273,7 +1279,10 @@ bool retro_load_game(const struct retro_game_info *game) {
 			retro_log_cb(RETRO_LOG_DEBUG, "[scummvm] launch via target id and scummvm.ini\n");
 			break;
 		case TEST_GAME_OK_ID_AUTODETECTED:
-			snprintf(buffer, sizeof(buffer), "-p \"%s\" --auto-detect", parent_dir.getPath().toString().c_str());
+			if (strcmp(render_mode_setting, "default") != 0)
+				snprintf(buffer, sizeof(buffer), "-p \"%s\" --auto-detect --render-mode=%s", parent_dir.getPath().toString().c_str(), render_mode_setting);
+			else
+				snprintf(buffer, sizeof(buffer), "-p \"%s\" --auto-detect", parent_dir.getPath().toString().c_str());
 			retro_log_cb(RETRO_LOG_DEBUG, "[scummvm] launch via autodetect\n");
 			break;
 		case TEST_GAME_KO_MULTIPLE_RESULTS:
