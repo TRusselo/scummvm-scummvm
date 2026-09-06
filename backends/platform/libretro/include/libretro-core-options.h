@@ -245,6 +245,25 @@ struct retro_core_option_v2_definition option_defs_us[] = {
 		"4"
 	},
 	{
+		"scummvm_render_mode",
+		"Video > Render mode",
+		"Render mode",
+		"Force a ScummVM render mode (passed as --render-mode). 'default' lets the engine choose. Useful when an engine's own render-mode setting is not reachable from the in-game menu.",
+		NULL,
+		"video",
+		{
+			{"default", NULL},
+			{"cga", NULL},
+			{"ega", NULL},
+			{"hercGreen", NULL},
+			{"hercAmber", NULL},
+			{"vga", NULL},
+			{"amiga", NULL},
+			{NULL, NULL},
+		},
+		"default"
+	},
+	{
 		"scummvm_framerate",
 		"Timing > Frame rate cap",
 		"Frame rate cap",
