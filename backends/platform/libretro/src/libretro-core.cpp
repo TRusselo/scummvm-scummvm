@@ -1498,6 +1498,29 @@ void retro_process_pending_savestate_op(void) {
 		return;
 
 	if (!s_saveOpArmed) {
+		// Engines refuse save/load outside the states where it is meaningful,
+		// and say so through these two. Ignoring them is not merely impolite:
+		// an engine asked to save before it has loaded anything will happily
+		// walk into its own uninitialised state. Griffon does exactly that --
+		// canSaveGameStateCurrently() is false outside kGameModePlay, and
+		// saving anyway at its title screen reaches drawView() with no map
+		// loaded and faults. The frontend offers save-state buttons whenever a
+		// core is running, so this is reachable by a plain button press.
+		//
+		// Checked before the load branch writes anything, so a refused load
+		// leaves no half-written slot file behind.
+		const bool opAllowed = (s_pendingSaveOp == LIBRETRO_SAVEOP_SAVE)
+		                       ? g_engine->canSaveGameStateCurrently()
+		                       : g_engine->canLoadGameStateCurrently();
+		if (!opAllowed) {
+			retro_osd_notification(s_pendingSaveOp == LIBRETRO_SAVEOP_SAVE
+			                       ? "Saving is not available right now"
+			                       : "Loading is not available right now");
+			s_saveOpSucceeded = false;
+			s_pendingSaveOp = LIBRETRO_SAVEOP_NONE;
+			return;
+		}
+
 		Common::Error err;
 		if (s_pendingSaveOp == LIBRETRO_SAVEOP_SAVE) {
 			err = g_engine->saveGameState(LIBRETRO_SAVESTATE_SLOT, "libretro savestate");
