@@ -25,6 +25,7 @@
 #include "common/error.h"
 #include "common/array.h"
 #include "common/savefile.h"
+#include "common/config-manager.h"
 #include "engines/engine.h"
 #include "streams/file_stream.h"
 #include <file/file_path.h>
@@ -1478,6 +1479,168 @@ static bool s_saveOpArmed = false;
 static bool s_saveOpSucceeded = false;
 static Common::Array<byte> s_saveStateBytes;
 
+// Save-state payload container.
+//
+// Originally the payload was just the reserved slot's save file, so a state
+// carried exactly one save: restore it on another device and the game resumed
+// at the right point with an empty ScummVM save list, because the player's own
+// F5 saves live in the frontend's persistent storage and never travel. A
+// normal emulator's state is a RAM dump that inherently contains the in-game
+// save; this bridge proxies to an engine save instead, so it has to carry the
+// rest deliberately.
+//
+// Layout: magic, entry count, then per entry a name and its bytes. The
+// reserved slot is packed first so a state is still restorable when the
+// remaining saves do not fit. The magic cannot collide with a legacy payload,
+// whose first four bytes are a save file's length and therefore below
+// LIBRETRO_SAVESTATE_MAX_SIZE, so old states are still readable.
+static const uint32 LIBRETRO_SAVESTATE_MAGIC = MKTAG('S', 'V', 'M', '1');
+
+static void libretro_append_u32(Common::Array<byte> &out, uint32 value) {
+	out.push_back((byte)(value & 0xFF));
+	out.push_back((byte)((value >> 8) & 0xFF));
+	out.push_back((byte)((value >> 16) & 0xFF));
+	out.push_back((byte)((value >> 24) & 0xFF));
+}
+
+static uint32 libretro_read_u32(const Common::Array<byte> &in, size_t offset) {
+	return (uint32)in[offset] | ((uint32)in[offset + 1] << 8) |
+	       ((uint32)in[offset + 2] << 16) | ((uint32)in[offset + 3] << 24);
+}
+
+static void libretro_append_entry(Common::Array<byte> &out, const Common::String &name, const Common::Array<byte> &data) {
+	libretro_append_u32(out, name.size());
+	for (uint i = 0; i < name.size(); i++)
+		out.push_back((byte)name[i]);
+	libretro_append_u32(out, data.size());
+	for (uint i = 0; i < data.size(); i++)
+		out.push_back(data[i]);
+}
+
+static bool libretro_read_save_file(const Common::String &name, Common::Array<byte> &out) {
+	Common::InSaveFile *f = g_system->getSavefileManager()->openForLoading(name);
+	if (!f)
+		return false;
+	out.resize(f->size());
+	if (out.size())
+		f->read(out.data(), out.size());
+	delete f;
+	return true;
+}
+
+// Packs the reserved slot plus every other save belonging to the running
+// target. scummvm.ini lives in this same directory under Emscripten (it is the
+// only persistent path the frontend offers), and is excluded deliberately: it
+// is global, machine-specific configuration, not this game's state, and
+// restoring it elsewhere would rewrite that device's other targets.
+static void libretro_pack_savestate(Common::Array<byte> &out) {
+	const Common::String reservedName = g_engine->getSaveStateName(LIBRETRO_SAVESTATE_SLOT);
+
+	Common::Array<byte> reserved;
+	if (!libretro_read_save_file(reservedName, reserved))
+		return;
+
+	Common::Array<byte> entries;
+	uint32 count = 1;
+	libretro_append_entry(entries, reservedName, reserved);
+
+	const Common::String target = ConfMan.getActiveDomainName();
+	const Common::String configName = g_system->getDefaultConfigFileName().baseName();
+	if (!target.empty()) {
+		Common::StringArray names = g_system->getSavefileManager()->listSavefiles(target + ".*");
+		for (uint i = 0; i < names.size(); i++) {
+			if (names[i] == reservedName || names[i] == configName)
+				continue;
+
+			Common::Array<byte> data;
+			if (!libretro_read_save_file(names[i], data))
+				continue;
+
+			// Header, this entry, and the outer length prefix must all fit.
+			const size_t projected = entries.size() + 12 + names[i].size() + data.size() + 4 + sizeof(uint32);
+			if (projected > LIBRETRO_SAVESTATE_MAX_SIZE)
+				continue;
+
+			libretro_append_entry(entries, names[i], data);
+			count++;
+		}
+	}
+
+	libretro_append_u32(out, LIBRETRO_SAVESTATE_MAGIC);
+	libretro_append_u32(out, count);
+	for (uint i = 0; i < entries.size(); i++)
+		out.push_back(entries[i]);
+}
+
+// Writes back every save a packed payload carries. A payload without the magic
+// is a legacy single-file state and is written to the reserved slot as before.
+// Returns false only if the payload is malformed.
+static bool libretro_unpack_savestate(const Common::Array<byte> &in) {
+	const Common::String reservedName = g_engine->getSaveStateName(LIBRETRO_SAVESTATE_SLOT);
+
+	Common::Array<Common::String> names;
+	Common::Array<Common::Array<byte> > blobs;
+
+	if (in.size() >= 4 && libretro_read_u32(in, 0) == LIBRETRO_SAVESTATE_MAGIC) {
+		if (in.size() < 8)
+			return false;
+		const uint32 count = libretro_read_u32(in, 4);
+		size_t offset = 8;
+		for (uint32 i = 0; i < count; i++) {
+			// size_t is 32-bit on wasm32, so every bounds check subtracts from
+			// the remaining length rather than adding to the offset: a corrupt
+			// or truncated state could otherwise carry a length near UINT32_MAX
+			// and wrap the addition past the check into an out-of-bounds read.
+			// offset <= in.size() is an invariant -- it only advances after a
+			// check -- so the subtractions below cannot underflow.
+			if (in.size() - offset < 4)
+				return false;
+			const uint32 nameLen = libretro_read_u32(in, offset);
+			offset += 4;
+			if (in.size() - offset < nameLen)
+				return false;
+			Common::String name;
+			for (uint32 n = 0; n < nameLen; n++)
+				name += (char)in[offset + n];
+			offset += nameLen;
+			if (in.size() - offset < 4)
+				return false;
+			const uint32 dataLen = libretro_read_u32(in, offset);
+			offset += 4;
+			if (in.size() - offset < dataLen)
+				return false;
+			Common::Array<byte> data;
+			data.resize(dataLen);
+			for (uint32 d = 0; d < dataLen; d++)
+				data[d] = in[offset + d];
+			offset += dataLen;
+			names.push_back(name);
+			blobs.push_back(data);
+		}
+	} else {
+		names.push_back(reservedName);
+		blobs.push_back(in);
+	}
+
+	for (uint i = 0; i < names.size(); i++) {
+		Common::OutSaveFile *f = g_system->getSavefileManager()->openForSaving(names[i]);
+		if (!f) {
+			// The reserved slot is the one that must land; the rest are a bonus.
+			if (names[i] == reservedName)
+				return false;
+			continue;
+		}
+		if (blobs[i].size())
+			f->write(blobs[i].data(), blobs[i].size());
+		f->finalize();
+		const bool ok = !f->err();
+		delete f;
+		if (!ok && names[i] == reservedName)
+			return false;
+	}
+	return true;
+}
+
 void retro_process_pending_savestate_op(void) {
 	if (s_pendingSaveOp == LIBRETRO_SAVEOP_NONE)
 		return;
@@ -1522,17 +1685,7 @@ void retro_process_pending_savestate_op(void) {
 		if (s_pendingSaveOp == LIBRETRO_SAVEOP_SAVE) {
 			err = g_engine->saveGameState(LIBRETRO_SAVESTATE_SLOT, "libretro savestate");
 		} else {
-			Common::OutSaveFile *f = g_system->getSavefileManager()->openForSaving(g_engine->getSaveStateName(LIBRETRO_SAVESTATE_SLOT));
-			if (!f) {
-				s_saveOpSucceeded = false;
-				s_pendingSaveOp = LIBRETRO_SAVEOP_NONE;
-				return;
-			}
-			f->write(s_saveStateBytes.data(), s_saveStateBytes.size());
-			f->finalize();
-			bool writeOk = !f->err();
-			delete f;
-			if (!writeOk) {
+			if (!libretro_unpack_savestate(s_saveStateBytes)) {
 				s_saveOpSucceeded = false;
 				s_pendingSaveOp = LIBRETRO_SAVEOP_NONE;
 				return;
@@ -1558,15 +1711,9 @@ void retro_process_pending_savestate_op(void) {
 	}
 
 	if (s_pendingSaveOp == LIBRETRO_SAVEOP_SAVE) {
-		Common::InSaveFile *f = g_system->getSavefileManager()->openForLoading(g_engine->getSaveStateName(LIBRETRO_SAVESTATE_SLOT));
-		if (f) {
-			s_saveStateBytes.resize(f->size());
-			f->read(s_saveStateBytes.data(), s_saveStateBytes.size());
-			delete f;
-			s_saveOpSucceeded = true;
-		} else {
-			s_saveOpSucceeded = false;
-		}
+		s_saveStateBytes.clear();
+		libretro_pack_savestate(s_saveStateBytes);
+		s_saveOpSucceeded = !s_saveStateBytes.empty();
 	} else {
 		// loadGameState() reporting kNoError only means the request was
 		// accepted, not that the load actually succeeded (see the comment on
