@@ -102,6 +102,39 @@ struct retro_core_option_v2_category option_cats_us[] = {
 
 struct retro_core_option_v2_definition option_defs_us[] = {
 	{
+		"scummvm_gmm_save",
+		"System > Enable save states in SCI games",
+		"Enable save states in SCI games",
+		"SCI games (Gabriel Knight, King's Quest, Space Quest, Leisure Suit Larry, ...) refuse to save outside their own in-game menu unless ScummVM's 'gmm_save_enabled' is set, and it defaults to off. Save states therefore fail on every SCI title until this is enabled. ScummVM warns that saves made at an arbitrary moment may be unusable: save from a normal gameplay screen, not with a menu or inventory open.",
+		NULL,
+		"system",
+		{
+			{"disabled", NULL},
+			{"enabled", NULL},
+			{NULL, NULL},
+		},
+		"disabled"
+	},
+	{
+		"scummvm_render_mode",
+		"Video > Render mode",
+		"Render mode",
+		"Force a ScummVM render mode (passed as --render-mode). 'default' lets the engine choose. Useful when an engine's own render-mode setting is not reachable from the in-game menu.",
+		NULL,
+		"video",
+		{
+			{"default", NULL},
+			{"cga", NULL},
+			{"ega", NULL},
+			{"hercGreen", NULL},
+			{"hercAmber", NULL},
+			{"vga", NULL},
+			{"amiga", NULL},
+			{NULL, NULL},
+		},
+		"default"
+	},
+	{
 		"scummvm_pointer_device",
 		"Cursor > Pointer Device",
 		"Pointer Device",
@@ -119,6 +152,54 @@ struct retro_core_option_v2_definition option_defs_us[] = {
 #else
 		"mouse"
 #endif
+	},
+	{
+		"scummvm_mouse_speed",
+		"Cursor > Mouse Speed",
+		"Mouse Speed",
+		"Sets the mouse cursor speed multiplier when moving the cursor with the RetroMouse.",
+		NULL,
+		"cursor",
+		{
+			{"0.05", NULL},
+			{"0.1", NULL},
+			{"0.15", NULL},
+			{"0.2", NULL},
+			{"0.25", NULL},
+			{"0.3", NULL},
+			{"0.35", NULL},
+			{"0.4", NULL},
+			{"0.45", NULL},
+			{"0.5", NULL},
+			{"0.6", NULL},
+			{"0.7", NULL},
+			{"0.8", NULL},
+			{"0.9", NULL},
+			{"1.0", NULL},
+			{"1.25", NULL},
+			{"1.5", NULL},
+			{"1.75", NULL},
+			{"2.0", NULL},
+			{"2.5", NULL},
+			{"3.0", NULL},
+			{NULL, NULL},
+		},
+		"1.0"
+	},
+	{
+		"scummvm_mouse_fine_control_speed_reduction",
+		"Cursor > Mouse Fine Control Speed Reduction",
+		"Mouse Fine Control Speed Reduction",
+		"Sets the mouse cursor speed reduction as percentage of normal speed when fine control is activated.",
+		NULL,
+		"cursor",
+		{
+			{"2", "50 %"},
+			{"4", "20 %"},
+			{"10", "10 %"},
+			{NULL, NULL},
+		},
+		"4"
 	},
 	{
 		"scummvm_gamepad_cursor_speed",
@@ -197,73 +278,6 @@ struct retro_core_option_v2_definition option_defs_us[] = {
 		"15"
 	},
 	{
-		"scummvm_mouse_speed",
-		"Cursor > Mouse Speed",
-		"Mouse Speed",
-		"Sets the mouse cursor speed multiplier when moving the cursor with the RetroMouse.",
-		NULL,
-		"cursor",
-		{
-			{"0.05", NULL},
-			{"0.1", NULL},
-			{"0.15", NULL},
-			{"0.2", NULL},
-			{"0.25", NULL},
-			{"0.3", NULL},
-			{"0.35", NULL},
-			{"0.4", NULL},
-			{"0.45", NULL},
-			{"0.5", NULL},
-			{"0.6", NULL},
-			{"0.7", NULL},
-			{"0.8", NULL},
-			{"0.9", NULL},
-			{"1.0", NULL},
-			{"1.25", NULL},
-			{"1.5", NULL},
-			{"1.75", NULL},
-			{"2.0", NULL},
-			{"2.5", NULL},
-			{"3.0", NULL},
-			{NULL, NULL},
-		},
-		"1.0"
-	},
-	{
-		"scummvm_mouse_fine_control_speed_reduction",
-		"Cursor > Mouse Fine Control Speed Reduction",
-		"Mouse Fine Control Speed Reduction",
-		"Sets the mouse cursor speed reduction as percentage of normal speed when fine control is activated.",
-		NULL,
-		"cursor",
-		{
-			{"2", "50 %"},
-			{"4", "20 %"},
-			{"10", "10 %"},
-			{NULL, NULL},
-		},
-		"4"
-	},
-	{
-		"scummvm_render_mode",
-		"Video > Render mode",
-		"Render mode",
-		"Force a ScummVM render mode (passed as --render-mode). 'default' lets the engine choose. Useful when an engine's own render-mode setting is not reachable from the in-game menu.",
-		NULL,
-		"video",
-		{
-			{"default", NULL},
-			{"cga", NULL},
-			{"ega", NULL},
-			{"hercGreen", NULL},
-			{"hercAmber", NULL},
-			{"vga", NULL},
-			{"amiga", NULL},
-			{NULL, NULL},
-		},
-		"default"
-	},
-	{
 		"scummvm_framerate",
 		"Timing > Frame rate cap",
 		"Frame rate cap",
@@ -293,6 +307,76 @@ struct retro_core_option_v2_definition option_defs_us[] = {
 			{ NULL, NULL },
 		},
 		"48000 Hz"
+	},
+	{
+		"scummvm_video_hw_acceleration",
+		"Video > Hardware acceleration",
+		"Hardware acceleration",
+		"Request video hardware acceleration (OpenGL or OpenGLES2) to the frontend if supported. It is needed to reload the core to apply this setting.",
+		NULL,
+		"video",
+		{
+			{"disabled", NULL},
+#ifdef USE_OPENGL
+			{"enabled", NULL},
+#endif
+			{NULL, NULL},
+		},
+#ifdef USE_OPENGL
+		"enabled"
+#else
+		"disabled"
+#endif
+	},
+#ifdef USE_HIGHRES
+	{
+		"scummvm_gui_aspect_ratio",
+		"Video > GUI aspect ratio",
+		"ScummVM Launcher aspect ratio",
+		"Set ScummVM Launcher aspect ratio.",
+		NULL,
+		"video",
+		{
+			{"0", "4:3"},
+			{"1", "16:9"},
+			{NULL, NULL},
+		},
+		"1"
+	},
+	{
+		"scummvm_gui_h_res",
+		"Video > GUI resolution",
+		"ScummVM Launcher resolution",
+		"Set ScummVM Launcher resolution.",
+		NULL,
+		"video",
+		{
+			{"240", "LD"},
+			{"480", "SD"},
+			{"720", "HD"},
+			{"1080", "FHD"},
+			{NULL, NULL},
+		},
+		"720"
+	},
+#endif
+	{
+		"scummvm_browsing_mode",
+		"System > Browsing mode",
+		"Browsing mode",
+		"Select how the ScummVM file browser lists locations. 'Authorized storage' shows the folders authorized through the frontend (e.g. Android SAF trees). 'Local filesystem' browses the standard local paths.",
+		NULL,
+		"system",
+		{
+			{"local", "Local filesystem"},
+			{"authorized", "Authorized storage"},
+			{NULL, NULL},
+		},
+#ifdef ANDROID
+		"authorized"
+#else
+		"local"
+#endif
 	},
 	/* Button mappings */
 	{
@@ -584,90 +668,6 @@ struct retro_core_option_v2_definition option_defs_us[] = {
 			{ NULL, NULL }
 		},
 		"RETROK_RIGHT"
-	},
-	{
-		"scummvm_video_hw_acceleration",
-		"Video > Hardware acceleration",
-		"Hardware acceleration",
-		"Request video hardware acceleration (OpenGL or OpenGLES2) to the frontend if supported. It is needed to reload the core to apply this setting.",
-		NULL,
-		"video",
-		{
-			{"disabled", NULL},
-#ifdef USE_OPENGL
-			{"enabled", NULL},
-#endif
-			{NULL, NULL},
-		},
-#ifdef USE_OPENGL
-		"enabled"
-#else
-		"disabled"
-#endif
-	},
-#ifdef USE_HIGHRES
-	{
-		"scummvm_gui_aspect_ratio",
-		"Video > GUI aspect ratio",
-		"ScummVM Launcher aspect ratio",
-		"Set ScummVM Launcher aspect ratio.",
-		NULL,
-		"video",
-		{
-			{"0", "4:3"},
-			{"1", "16:9"},
-			{NULL, NULL},
-		},
-		"1"
-	},
-	{
-		"scummvm_gui_h_res",
-		"Video > GUI resolution",
-		"ScummVM Launcher resolution",
-		"Set ScummVM Launcher resolution.",
-		NULL,
-		"video",
-		{
-			{"240", "LD"},
-			{"480", "SD"},
-			{"720", "HD"},
-			{"1080", "FHD"},
-			{NULL, NULL},
-		},
-		"720"
-	},
-#endif
-	{
-		"scummvm_browsing_mode",
-		"System > Browsing mode",
-		"Browsing mode",
-		"Select how the ScummVM file browser lists locations. 'Authorized storage' shows the folders authorized through the frontend (e.g. Android SAF trees). 'Local filesystem' browses the standard local paths.",
-		NULL,
-		"system",
-		{
-			{"local", "Local filesystem"},
-			{"authorized", "Authorized storage"},
-			{NULL, NULL},
-		},
-#ifdef ANDROID
-		"authorized"
-#else
-		"local"
-#endif
-	},
-	{
-		"scummvm_gmm_save",
-		"System > Enable save states in SCI games",
-		"Enable save states in SCI games",
-		"SCI games (Gabriel Knight, King's Quest, Space Quest, Leisure Suit Larry, ...) refuse to save outside their own in-game menu unless ScummVM's 'gmm_save_enabled' is set, and it defaults to off. Save states therefore fail on every SCI title until this is enabled. ScummVM warns that saves made at an arbitrary moment may be unusable: save from a normal gameplay screen, not with a menu or inventory open.",
-		NULL,
-		"system",
-		{
-			{"disabled", NULL},
-			{"enabled", NULL},
-			{NULL, NULL},
-		},
-		"disabled"
 	},
 	{ NULL, NULL, NULL, NULL, NULL, NULL, {{0}}, NULL },
 };
