@@ -361,6 +361,15 @@ Common::Error SciEngine::loadGameState(int slot) {
 	return Common::kNoError;
 }
 
+bool SciEngine::isSaveOrLoadPending() const {
+	// loadGameState() only arms the delayed restore; the restore itself happens
+	// later, from GuestAdditions::kGetEventHook()/kWaitHook() once the
+	// interpreter reaches a safe point. Until _delayedRestoreGameId clears, the
+	// load really is still in flight, and a caller that asked for one must not
+	// be told it has finished -- EngineState::reset() can still discard it.
+	return _gamestate && _gamestate->_delayedRestoreGameId != -1;
+}
+
 Common::Error SciEngine::saveGameState(int slot, const Common::String &desc, bool isAutosave) {
 	const char *version = "";
 	_soundCmd->pauseAll(false); // unpause music (we can't have it paused during save)
