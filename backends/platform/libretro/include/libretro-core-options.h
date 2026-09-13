@@ -655,6 +655,20 @@ struct retro_core_option_v2_definition option_defs_us[] = {
 		"local"
 #endif
 	},
+	{
+		"scummvm_gmm_save",
+		"System > Enable save states in SCI games",
+		"Enable save states in SCI games",
+		"SCI games (Gabriel Knight, King's Quest, Space Quest, Leisure Suit Larry, ...) refuse to save outside their own in-game menu unless ScummVM's 'gmm_save_enabled' is set, and it defaults to off. Save states therefore fail on every SCI title until this is enabled. ScummVM warns that saves made at an arbitrary moment may be unusable: save from a normal gameplay screen, not with a menu or inventory open.",
+		NULL,
+		"system",
+		{
+			{"disabled", NULL},
+			{"enabled", NULL},
+			{NULL, NULL},
+		},
+		"disabled"
+	},
 	{ NULL, NULL, NULL, NULL, NULL, NULL, {{0}}, NULL },
 };
 
