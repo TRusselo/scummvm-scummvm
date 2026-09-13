@@ -401,7 +401,7 @@ struct retro_core_option_v2_definition option_defs_us[] = {
 		{
 			{ NULL, NULL }
 		},
-		"RETROK_F5"
+		"RETROKE_SCUMMVM_GUI"
 	},
 	{
 		"scummvm_mapper_start",
