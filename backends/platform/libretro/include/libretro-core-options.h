@@ -473,7 +473,7 @@ struct retro_core_option_v2_definition option_defs_us[] = {
 		{
 			{ NULL, NULL }
 		},
-		"---"
+		"RETROKE_VKBD"
 	},
 	{
 		"scummvm_mapper_r3",
