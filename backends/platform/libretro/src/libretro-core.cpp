@@ -1499,6 +1499,17 @@ static size_t s_saveStateBudget = LIBRETRO_SAVESTATE_MIN_SIZE;
 // giving up and reporting failure rather than hanging the frontend forever.
 static const int LIBRETRO_SAVESTATE_MAX_SWITCHES = 600;
 
+// Frames to keep re-asking an engine that answered "not right now" before
+// giving up on the request. canSave/canLoadGameStateCurrently() report whether
+// this instant is safe, not whether the operation is ever possible: Riven
+// refuses while _scriptMan->hasQueuedScripts() is true, so any animation on
+// screen blocks it, and SCI refuses while _gamestate->executionStackBase is
+// non-zero, which covers most of a game's startup. Both clear on their own a
+// short time later. Long enough for those to pass, short enough that a
+// genuine refusal does not freeze the frontend for long.
+static const int LIBRETRO_SAVESTATE_MAX_REFUSALS = 180;
+static int s_saveOpRefusals = 0;
+
 enum LibretroSaveOp {
 	LIBRETRO_SAVEOP_NONE,
 	LIBRETRO_SAVEOP_SAVE,
@@ -1722,6 +1733,17 @@ void retro_process_pending_savestate_op(void) {
 		                       ? g_engine->canSaveGameStateCurrently()
 		                       : g_engine->canLoadGameStateCurrently();
 		if (!opAllowed) {
+			// Leave the request pending and come back next frame: the engine
+			// is mid-script or mid-animation, not permanently closed. Only
+			// once the window has stayed shut for the whole budget is this a
+			// real refusal worth reporting.
+			if (++s_saveOpRefusals < LIBRETRO_SAVESTATE_MAX_REFUSALS)
+				return;
+
+			if (retro_log_cb)
+				retro_log_cb(RETRO_LOG_WARN, "[scummvm] %s refused for %d frames, giving up.\n",
+				             s_pendingSaveOp == LIBRETRO_SAVEOP_SAVE ? "Save" : "Load",
+				             s_saveOpRefusals);
 			retro_osd_notification(s_pendingSaveOp == LIBRETRO_SAVEOP_SAVE
 			                       ? "Saving is not available right now"
 			                       : "Loading is not available right now");
@@ -1735,6 +1757,8 @@ void retro_process_pending_savestate_op(void) {
 			err = g_engine->saveGameState(LIBRETRO_SAVESTATE_SLOT, "libretro savestate");
 		} else {
 			if (!libretro_unpack_savestate(s_saveStateBytes)) {
+				if (retro_log_cb)
+					retro_log_cb(RETRO_LOG_ERROR, "[scummvm] Save state payload could not be written to the save directory.\n");
 				s_saveOpSucceeded = false;
 				s_pendingSaveOp = LIBRETRO_SAVEOP_NONE;
 				return;
@@ -1743,6 +1767,10 @@ void retro_process_pending_savestate_op(void) {
 		}
 
 		if (err.getCode() != Common::kNoError) {
+			if (retro_log_cb)
+				retro_log_cb(RETRO_LOG_ERROR, "[scummvm] Engine refused the %s: %s\n",
+				             s_pendingSaveOp == LIBRETRO_SAVEOP_SAVE ? "save" : "load",
+				             err.getDesc().c_str());
 			s_saveOpSucceeded = false;
 			s_pendingSaveOp = LIBRETRO_SAVEOP_NONE;
 			return;
@@ -1844,6 +1872,7 @@ bool retro_serialize(void *data, size_t size) {
 
 	s_pendingSaveOp = LIBRETRO_SAVEOP_SAVE;
 	s_saveOpArmed = false;
+	s_saveOpRefusals = 0;
 	s_saveOpSucceeded = false;
 	s_saveStateBytes.clear();
 	// The packer drops extra saves that do not fit; tell it what the frontend
@@ -1883,6 +1912,7 @@ bool retro_unserialize(const void *data, size_t size) {
 
 	s_pendingSaveOp = LIBRETRO_SAVEOP_LOAD;
 	s_saveOpArmed = false;
+	s_saveOpRefusals = 0;
 	s_saveOpSucceeded = false;
 
 	for (int i = 0; s_pendingSaveOp != LIBRETRO_SAVEOP_NONE && i < LIBRETRO_SAVESTATE_MAX_SWITCHES; i++)
