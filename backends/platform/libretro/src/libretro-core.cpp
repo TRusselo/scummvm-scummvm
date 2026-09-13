@@ -120,6 +120,7 @@ static int16 *audio_sample_buffer = NULL; // pointer to output buffer
 
 static bool input_bitmask_supported = false;
 static bool browsing_mode_authorized = false;
+static bool gmm_save_enabled = false;
 static bool updating_variables = false;
 
 #ifdef USE_OPENGL
@@ -424,6 +425,10 @@ static void update_variables(void) {
 		browsing_mode_authorized = false;
 #endif
 
+	var.key = "scummvm_gmm_save";
+	var.value = NULL;
+	gmm_save_enabled = environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var) && var.value && (strcmp(var.value, "enabled") == 0);
+
 	var.key = "scummvm_mapper_up";
 	var.value = NULL;
 	if (environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var) && var.value) {
@@ -710,6 +715,10 @@ uint16 retro_setting_get_sample_rate(void) {
 
 bool retro_setting_get_browsing_mode_authorized(void) {
 	return browsing_mode_authorized;
+}
+
+bool retro_setting_get_gmm_save_enabled(void) {
+	return gmm_save_enabled;
 }
 
 
