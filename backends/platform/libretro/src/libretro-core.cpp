@@ -1498,13 +1498,20 @@ static const int LIBRETRO_SAVESTATE_MAX_SWITCHES = 600;
 
 // Frames to keep re-asking an engine that answered "not right now" before
 // giving up on the request. canSave/canLoadGameStateCurrently() report whether
-// this instant is safe, not whether the operation is ever possible: Riven
-// refuses while _scriptMan->hasQueuedScripts() is true, so any animation on
-// screen blocks it, and SCI refuses while _gamestate->executionStackBase is
-// non-zero, which covers most of a game's startup. Both clear on their own a
-// short time later. Long enough for those to pass, short enough that a
-// genuine refusal does not freeze the frontend for long.
-static const int LIBRETRO_SAVESTATE_MAX_REFUSALS = 180;
+// this instant is safe, not whether the operation is ever possible.
+//
+// Deliberately small. Each retry is a retro_switch_to_emu_thread(), which
+// hands the main thread to the emulator and blocks until it yields ~8ms later
+// (LibretroTimerManager::_interval, half a frame at the current refresh rate).
+// The engine does advance -- but nothing is drawn while we hold the thread, so
+// every frame of budget is a frame of frozen frontend. 180 measured ~1.9s of
+// dead tab and still did not outlast a Riven animation, which runs for
+// seconds: waiting long enough to help costs more than the help is worth.
+//
+// So this covers only a momentary refusal. Waiting for a scene to finish
+// belongs in the frontend, where the game keeps running and drawing between
+// attempts -- see patches/04-savestate-retry.patch.
+static const int LIBRETRO_SAVESTATE_MAX_REFUSALS = 10;
 
 // Frames to wait for ScummVM to construct an engine before giving up on a
 // save-state request. A frontend can ask for a load the instant the core
