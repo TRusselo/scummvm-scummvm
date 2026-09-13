@@ -1472,6 +1472,14 @@ static const int LIBRETRO_SAVESTATE_SLOT = 200;
 static const size_t LIBRETRO_SAVESTATE_MIN_SIZE = 1 * 1024 * 1024;
 static const size_t LIBRETRO_SAVESTATE_MAX_SIZE = 64 * 1024 * 1024;
 
+// What to ask for when the target has no saves at all and the estimate has
+// nothing to go on. This is the size the core always used to report, so a
+// first save state can never fail where it previously succeeded -- which it
+// would if an engine's first save happened to exceed a smaller floor. Once
+// any save exists, including the reserved slot this very state writes, the
+// estimate has real sizes to work from and drops well below this.
+static const size_t LIBRETRO_SAVESTATE_UNKNOWN_SIZE = 8 * 1024 * 1024;
+
 // The budget the frontend actually allocated for the state in flight. The
 // packer runs on the emu thread and cannot see retro_serialize()'s size
 // argument, so it is handed over here rather than assumed.
@@ -1795,9 +1803,14 @@ static size_t libretro_estimate_savestate_size(void) {
 		}
 	}
 
+	// Nothing on disk to reason from: fall back to the historical fixed size
+	// rather than guess low and fail a save that used to work.
+	if (!largest)
+		return LIBRETRO_SAVESTATE_UNKNOWN_SIZE;
+
 	// The reserved slot is written fresh by this save and may be larger than
 	// anything already on disk, so reserve another save's worth for it.
-	needed += largest ? largest : LIBRETRO_SAVESTATE_MIN_SIZE;
+	needed += largest;
 
 	// Slack: saves grow as a game progresses, and an estimate that comes in
 	// short makes retro_serialize() fail outright.
