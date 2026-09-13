@@ -353,7 +353,7 @@ struct retro_core_option_v2_definition option_defs_us[] = {
 		{
 			{ NULL, NULL }
 		},
-		"RETROK_SPACE"
+		"RETROKE_LEFT_BUTTON"
 	},
 	{
 		"scummvm_mapper_b",
@@ -365,7 +365,7 @@ struct retro_core_option_v2_definition option_defs_us[] = {
 		{
 			{ NULL, NULL }
 		},
-		"RETROK_RETURN"
+		"RETROKE_RIGHT_BUTTON"
 	},
 	{
 		"scummvm_mapper_x",
@@ -377,7 +377,7 @@ struct retro_core_option_v2_definition option_defs_us[] = {
 		{
 			{ NULL, NULL }
 		},
-		"RETROK_F5"
+		"RETROK_RETURN"
 	},
 	{
 		"scummvm_mapper_y",
@@ -401,7 +401,7 @@ struct retro_core_option_v2_definition option_defs_us[] = {
 		{
 			{ NULL, NULL }
 		},
-		"RETROKE_VKBD"
+		"RETROK_F5"
 	},
 	{
 		"scummvm_mapper_start",
@@ -413,7 +413,7 @@ struct retro_core_option_v2_definition option_defs_us[] = {
 		{
 			{ NULL, NULL }
 		},
-		"RETROKE_SCUMMVM_GUI"
+		"RETROK_SPACE"
 	},
 	{
 		"scummvm_mapper_l",
