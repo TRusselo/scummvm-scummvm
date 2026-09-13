@@ -66,6 +66,17 @@ void OSystem_libretro::getTimeAndDate(TimeDate &t, bool skipRecord) const {
 }
 
 Common::Path OSystem_libretro::getDefaultConfigFileName() {
+#ifdef EMSCRIPTEN
+	/* The system directory is not persistent under Emscripten: the frontend
+	 * reports the content directory for it, which lives in MEMFS and is
+	 * rebuilt from nothing on every page load. A scummvm.ini written there is
+	 * gone by the next run, so no setting made in the GUI -- engine options,
+	 * audio, subtitles -- ever survives. The save directory is the one path
+	 * the frontend backs with persistent storage, so keep the config beside
+	 * the saves instead. */
+	if (!s_saveDir.empty())
+		return Common::Path(s_saveDir).appendComponent("scummvm.ini");
+#endif
 	if (s_systemDir.empty())
 		return Common::Path("scummvm.ini");
 	else
