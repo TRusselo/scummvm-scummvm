@@ -1455,13 +1455,24 @@ size_t retro_get_memory_size(unsigned type) {
 // in the chain to indicate the mismatch.
 static const int LIBRETRO_SAVESTATE_SLOT = 200;
 
-// A fixed upper bound, not an exact size: libretro cores are not required
-// to report an exact serialized size, only one big enough to hold the
-// largest state they'll ever produce (see the libretro API docs for
-// retro_serialize_size()). The actual payload length is written as a
-// 4-byte header in front of the real save bytes -- see retro_serialize()/
-// retro_unserialize() below -- so the unused remainder is never read back.
-static const size_t LIBRETRO_SAVESTATE_MAX_SIZE = 8 * 1024 * 1024;
+// retro_serialize_size() used to return a flat 8 MiB. The frontend writes
+// whatever that call reports -- it never learns how much was actually used
+// (tasks/task_save.c takes _len from core_serialize_size() and writes the
+// whole buffer) -- so every save state was 8 MiB of mostly zero padding, and
+// raising the bound to fit a large-save engine would have inflated all of
+// them. The size is now estimated from the saves the target actually has, so
+// most states are a fraction of that and the ceiling can be generous without
+// anyone paying for it. These two clamp the estimate.
+//
+// The floor matters more than the ceiling: an estimate that comes in under
+// what packing needs makes retro_serialize() fail, so err high.
+static const size_t LIBRETRO_SAVESTATE_MIN_SIZE = 1 * 1024 * 1024;
+static const size_t LIBRETRO_SAVESTATE_MAX_SIZE = 64 * 1024 * 1024;
+
+// The budget the frontend actually allocated for the state in flight. The
+// packer runs on the emu thread and cannot see retro_serialize()'s size
+// argument, so it is handed over here rather than assumed.
+static size_t s_saveStateBudget = LIBRETRO_SAVESTATE_MIN_SIZE;
 
 // Generous bound on how many times retro_serialize()/retro_unserialize()
 // will resume the emu thread while waiting for a request to finish, before
@@ -1491,9 +1502,13 @@ static Common::Array<byte> s_saveStateBytes;
 //
 // Layout: magic, entry count, then per entry a name and its bytes. The
 // reserved slot is packed first so a state is still restorable when the
-// remaining saves do not fit. The magic cannot collide with a legacy payload,
-// whose first four bytes are a save file's length and therefore below
-// LIBRETRO_SAVESTATE_MAX_SIZE, so old states are still readable.
+// remaining saves do not fit.
+//
+// A legacy payload is a bare save file, so its first four bytes are that
+// file's own header -- nothing guarantees they cannot happen to equal the
+// magic. Detection therefore does not rest on that: a payload whose magic
+// matches but whose structure does not parse is treated as legacy rather
+// than rejected, so a collision costs nothing.
 static const uint32 LIBRETRO_SAVESTATE_MAGIC = MKTAG('S', 'V', 'M', '1');
 
 static void libretro_append_u32(Common::Array<byte> &out, uint32 value) {
@@ -1558,7 +1573,7 @@ static void libretro_pack_savestate(Common::Array<byte> &out) {
 
 			// Header, this entry, and the outer length prefix must all fit.
 			const size_t projected = entries.size() + 12 + names[i].size() + data.size() + 4 + sizeof(uint32);
-			if (projected > LIBRETRO_SAVESTATE_MAX_SIZE)
+			if (projected > s_saveStateBudget)
 				continue;
 
 			libretro_append_entry(entries, names[i], data);
@@ -1581,34 +1596,42 @@ static bool libretro_unpack_savestate(const Common::Array<byte> &in) {
 	Common::Array<Common::String> names;
 	Common::Array<Common::Array<byte> > blobs;
 
-	if (in.size() >= 4 && libretro_read_u32(in, 0) == LIBRETRO_SAVESTATE_MAGIC) {
-		if (in.size() < 8)
-			return false;
+	bool parsed = false;
+	if (in.size() >= 8 && libretro_read_u32(in, 0) == LIBRETRO_SAVESTATE_MAGIC) {
 		const uint32 count = libretro_read_u32(in, 4);
 		size_t offset = 8;
-		for (uint32 i = 0; i < count; i++) {
+		parsed = true;
+		for (uint32 i = 0; i < count && parsed; i++) {
 			// size_t is 32-bit on wasm32, so every bounds check subtracts from
 			// the remaining length rather than adding to the offset: a corrupt
 			// or truncated state could otherwise carry a length near UINT32_MAX
 			// and wrap the addition past the check into an out-of-bounds read.
 			// offset <= in.size() is an invariant -- it only advances after a
 			// check -- so the subtractions below cannot underflow.
-			if (in.size() - offset < 4)
-				return false;
+			if (in.size() - offset < 4) {
+				parsed = false;
+				break;
+			}
 			const uint32 nameLen = libretro_read_u32(in, offset);
 			offset += 4;
-			if (in.size() - offset < nameLen)
-				return false;
+			if (in.size() - offset < nameLen) {
+				parsed = false;
+				break;
+			}
 			Common::String name;
 			for (uint32 n = 0; n < nameLen; n++)
 				name += (char)in[offset + n];
 			offset += nameLen;
-			if (in.size() - offset < 4)
-				return false;
+			if (in.size() - offset < 4) {
+				parsed = false;
+				break;
+			}
 			const uint32 dataLen = libretro_read_u32(in, offset);
 			offset += 4;
-			if (in.size() - offset < dataLen)
-				return false;
+			if (in.size() - offset < dataLen) {
+				parsed = false;
+				break;
+			}
 			Common::Array<byte> data;
 			data.resize(dataLen);
 			for (uint32 d = 0; d < dataLen; d++)
@@ -1617,7 +1640,13 @@ static bool libretro_unpack_savestate(const Common::Array<byte> &in) {
 			names.push_back(name);
 			blobs.push_back(data);
 		}
-	} else {
+	}
+
+	// Either it never looked like a container, or it did and did not hold up:
+	// a bare save file for the reserved slot is the only other thing it can be.
+	if (!parsed) {
+		names.clear();
+		blobs.clear();
 		names.push_back(reservedName);
 		blobs.push_back(in);
 	}
@@ -1729,10 +1758,59 @@ void retro_process_pending_savestate_op(void) {
 	s_pendingSaveOp = LIBRETRO_SAVEOP_NONE;
 }
 
+// Estimates the buffer the next state needs from the saves the target already
+// has, so the frontend allocates and writes roughly what is required instead
+// of a flat maximum.
+//
+// Runs on the main thread. That is safe here for a specific reason: the main
+// and emu threads never run concurrently -- retro_switch_to_emu_thread()
+// blocks on a condition variable until the emu thread hands control back (see
+// libretro-threads.cpp) -- so there is no data race. What would be unsafe is
+// re-entering the engine, which is parked at an arbitrary yield point; this
+// only reads g_engine's save-state name and goes through the SaveFileManager,
+// a backend service, so it never re-enters.
+static size_t libretro_estimate_savestate_size(void) {
+	// Container header plus the outer length prefix.
+	size_t needed = 16;
+	size_t largest = 0;
+
+	const Common::String target = ConfMan.getActiveDomainName();
+	if (!target.empty()) {
+		const Common::String configName = g_system->getDefaultConfigFileName().baseName();
+		Common::StringArray names = g_system->getSavefileManager()->listSavefiles(target + ".*");
+		for (uint i = 0; i < names.size(); i++) {
+			if (names[i] == configName)
+				continue;
+			Common::InSaveFile *f = g_system->getSavefileManager()->openForLoading(names[i]);
+			if (!f)
+				continue;
+			const size_t entrySize = (size_t)f->size();
+			delete f;
+			needed += 8 + names[i].size() + entrySize;
+			if (entrySize > largest)
+				largest = entrySize;
+		}
+	}
+
+	// The reserved slot is written fresh by this save and may be larger than
+	// anything already on disk, so reserve another save's worth for it.
+	needed += largest ? largest : LIBRETRO_SAVESTATE_MIN_SIZE;
+
+	// Slack: saves grow as a game progresses, and an estimate that comes in
+	// short makes retro_serialize() fail outright.
+	needed += needed / 4;
+
+	if (needed < LIBRETRO_SAVESTATE_MIN_SIZE)
+		needed = LIBRETRO_SAVESTATE_MIN_SIZE;
+	if (needed > LIBRETRO_SAVESTATE_MAX_SIZE)
+		needed = LIBRETRO_SAVESTATE_MAX_SIZE;
+	return needed;
+}
+
 size_t retro_serialize_size(void) {
 	if (!g_engine)
 		return 0;
-	return LIBRETRO_SAVESTATE_MAX_SIZE;
+	return libretro_estimate_savestate_size();
 }
 
 bool retro_serialize(void *data, size_t size) {
@@ -1743,6 +1821,9 @@ bool retro_serialize(void *data, size_t size) {
 	s_saveOpArmed = false;
 	s_saveOpSucceeded = false;
 	s_saveStateBytes.clear();
+	// The packer drops extra saves that do not fit; tell it what the frontend
+	// actually allocated rather than letting it assume the ceiling.
+	s_saveStateBudget = size;
 
 	// Drive the emu thread forward (exactly as retro_run() does once per
 	// frame) until retro_process_pending_savestate_op(), called from
