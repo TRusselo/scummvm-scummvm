@@ -1505,6 +1505,15 @@ static const int LIBRETRO_SAVESTATE_MAX_SWITCHES = 600;
 // short time later. Long enough for those to pass, short enough that a
 // genuine refusal does not freeze the frontend for long.
 static const int LIBRETRO_SAVESTATE_MAX_REFUSALS = 180;
+
+// Frames to wait for ScummVM to construct an engine before giving up on a
+// save-state request. A frontend can ask for a load the instant the core
+// starts -- EmulatorJS's "load recent save state" does exactly that, while
+// ScummVM is still in its launcher and g_engine is still NULL. The engine
+// appears a moment later on the emu thread, so wait for it rather than
+// failing instantly; waiting for a game's first screen to appear before
+// clicking load was the manual workaround this removes.
+static const int LIBRETRO_SAVESTATE_MAX_ENGINE_WAIT = 300;
 static int s_saveOpRefusals = 0;
 
 enum LibretroSaveOp {
@@ -1864,8 +1873,14 @@ size_t retro_serialize_size(void) {
 }
 
 bool retro_serialize(void *data, size_t size) {
-	if (!g_engine || !data || size < sizeof(uint32))
+	if (!data || size < sizeof(uint32))
 		return false;
+
+	if (!g_engine) {
+		if (retro_log_cb)
+			retro_log_cb(RETRO_LOG_WARN, "[scummvm] No engine running; nothing to save.\n");
+		return false;
+	}
 
 	s_pendingSaveOp = LIBRETRO_SAVEOP_SAVE;
 	s_saveOpArmed = false;
@@ -1896,13 +1911,27 @@ bool retro_serialize(void *data, size_t size) {
 }
 
 bool retro_unserialize(const void *data, size_t size) {
-	if (!g_engine || !data || size < sizeof(uint32))
+	if (!data || size < sizeof(uint32))
 		return false;
+
+	for (int i = 0; !g_engine && i < LIBRETRO_SAVESTATE_MAX_ENGINE_WAIT; i++)
+		retro_switch_to_emu_thread();
+
+	if (!g_engine) {
+		if (retro_log_cb)
+			retro_log_cb(RETRO_LOG_WARN, "[scummvm] No engine running after %d frames; cannot load a save state.\n",
+			             LIBRETRO_SAVESTATE_MAX_ENGINE_WAIT);
+		return false;
+	}
 
 	uint32 payloadSize;
 	memcpy(&payloadSize, data, sizeof(payloadSize));
-	if (sizeof(payloadSize) + (size_t)payloadSize > size)
+	if (sizeof(payloadSize) + (size_t)payloadSize > size) {
+		if (retro_log_cb)
+			retro_log_cb(RETRO_LOG_ERROR, "[scummvm] Save state payload (%u bytes) does not fit the %u bytes given.\n",
+			             (unsigned)payloadSize, (unsigned)size);
 		return false;
+	}
 
 	s_saveStateBytes.resize(payloadSize);
 	memcpy(s_saveStateBytes.data(), (const byte *)data + sizeof(payloadSize), payloadSize);
@@ -1915,7 +1944,17 @@ bool retro_unserialize(const void *data, size_t size) {
 	for (int i = 0; s_pendingSaveOp != LIBRETRO_SAVEOP_NONE && i < LIBRETRO_SAVESTATE_MAX_SWITCHES; i++)
 		retro_switch_to_emu_thread();
 
-	return s_pendingSaveOp == LIBRETRO_SAVEOP_NONE && s_saveOpSucceeded;
+	if (s_pendingSaveOp != LIBRETRO_SAVEOP_NONE) {
+		// The emu thread never reached a decision within the budget. Abandon
+		// the request so it cannot fire later against a different game state.
+		if (retro_log_cb)
+			retro_log_cb(RETRO_LOG_ERROR, "[scummvm] Load did not complete within %d frames.\n",
+			             LIBRETRO_SAVESTATE_MAX_SWITCHES);
+		s_pendingSaveOp = LIBRETRO_SAVEOP_NONE;
+		return false;
+	}
+
+	return s_saveOpSucceeded;
 }
 void retro_cheat_reset(void) {}
 void retro_cheat_set(unsigned unused, bool unused1, const char *unused2) {}
