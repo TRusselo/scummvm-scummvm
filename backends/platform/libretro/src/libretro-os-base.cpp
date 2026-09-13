@@ -115,6 +115,26 @@ Audio::Mixer *OSystem_libretro::getMixer() {
 }
 
 void OSystem_libretro::refreshRetroSettings() {
+	/* SCI's GameFeatures::canSaveFromGMM() returns false unless
+	 * "gmm_save_enabled" is set, so no SCI game can save-state at all. The
+	 * ScummVM GUI toggle for it cannot help under a frontend whose config file
+	 * does not survive a reload, so take it from the core option instead.
+	 *
+	 * The transient domain is where command-line settings land, so this
+	 * behaves exactly like passing the setting on the command line and is
+	 * never written back to scummvm.ini. Removing the key rather than storing
+	 * false matters: transient outranks the game domain, so a stored false
+	 * would override a per-game value set in ScummVM's own GUI.
+	 *
+	 * Doing this here rather than in initBackend() covers both moments with
+	 * one call site -- initBackend() ends by calling this, and
+	 * retro_update_options_display() calls it again whenever an option
+	 * changes, so toggling it mid-game takes effect without a core reload. */
+	if (retro_setting_get_gmm_save_enabled())
+		ConfMan.setBool("gmm_save_enabled", true, Common::ConfigManager::kTransientDomain);
+	else
+		ConfMan.removeKey("gmm_save_enabled", Common::ConfigManager::kTransientDomain);
+
 	_adjusted_cursor_speed = (float)BASE_CURSOR_SPEED * retro_setting_get_gamepad_cursor_speed() * (float)getScreenWidth() / 320.0f; // Dpad cursor speed should always be based off a 320 wide screen, to keep speeds consistent;
 	_inverse_acceleration_time = (retro_setting_get_gamepad_acceleration_time() > 0.0) ? (1.0f / (float)retro_setting_get_frame_rate()) * (1.0f / retro_setting_get_gamepad_acceleration_time()) : 1.0f;
 }
