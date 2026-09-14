@@ -1757,9 +1757,20 @@ void retro_process_pending_savestate_op(void) {
 				retro_log_cb(RETRO_LOG_WARN, "[scummvm] %s refused for %d frames, giving up.\n",
 				             s_pendingSaveOp == LIBRETRO_SAVEOP_SAVE ? "Save" : "Load",
 				             s_saveOpRefusals);
-			retro_osd_notification(s_pendingSaveOp == LIBRETRO_SAVEOP_SAVE
-			                       ? "Saving is not available right now"
-			                       : "Loading is not available right now");
+			// "Not available right now" is true of an engine that is merely
+			// busy, and misleading for the one case where the refusal is
+			// permanent: SCI declines every save unless gmm_save_enabled is
+			// set, so the answer will not change until the user turns the
+			// option on. Name the setting instead of letting them wait for a
+			// window that never opens.
+			if (s_pendingSaveOp == LIBRETRO_SAVEOP_SAVE
+			    && !retro_setting_get_gmm_save_enabled()
+			    && ConfMan.get("engineid").equalsIgnoreCase("sci"))
+				retro_osd_notification("Turn on \"Enable save states in SCI games\" in the settings menu");
+			else
+				retro_osd_notification(s_pendingSaveOp == LIBRETRO_SAVEOP_SAVE
+				                       ? "Saving is not available right now"
+				                       : "Loading is not available right now");
 			s_saveOpSucceeded = false;
 			s_pendingSaveOp = LIBRETRO_SAVEOP_NONE;
 			return;
