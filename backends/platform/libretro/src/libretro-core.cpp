@@ -1521,6 +1521,9 @@ static const int LIBRETRO_SAVESTATE_MAX_REFUSALS = 10;
 // failing instantly; waiting for a game's first screen to appear before
 // clicking load was the manual workaround this removes.
 static const int LIBRETRO_SAVESTATE_MAX_ENGINE_WAIT = 300;
+
+// Shared with the page: see libretro_write_savestate_error().
+#define LIBRETRO_SAVESTATE_ERROR_PATH "/savestate_error.txt"
 static int s_saveOpRefusals = 0;
 
 enum LibretroSaveOp {
@@ -1714,6 +1717,35 @@ static bool libretro_unpack_savestate(const Common::Array<byte> &in) {
 	return true;
 }
 
+// Leaves the reason a save/load was refused where the frontend can read it.
+//
+// The OSD is not a usable channel here: RETRO_MESSAGE_TARGET_OSD never reaches
+// the log, and EmulatorJS does not surface it on screen either, so a message
+// sent that way is invisible in both places -- which is exactly what happened
+// to the SCI guidance added earlier. The Emscripten filesystem is shared with
+// the page, so writing the reason there puts it somewhere JavaScript can
+// actually pick it up and show.
+//
+// First line is "permanent" or "temporary": a frontend that retries should
+// stop immediately on the former, because no amount of waiting will change the
+// answer. Second line is the text to show the user.
+static void libretro_write_savestate_error(bool permanent, const char *message) {
+	RFILE *f = filestream_open(LIBRETRO_SAVESTATE_ERROR_PATH,
+	                           RETRO_VFS_FILE_ACCESS_WRITE, RETRO_VFS_FILE_ACCESS_HINT_NONE);
+	if (!f)
+		return;
+	const char *kind = permanent ? "permanent\n" : "temporary\n";
+	filestream_write(f, kind, strlen(kind));
+	filestream_write(f, message, strlen(message));
+	filestream_close(f);
+}
+
+// Removed before every attempt, so a stale reason from a previous refusal is
+// never mistaken for this one's.
+static void libretro_clear_savestate_error(void) {
+	filestream_delete(LIBRETRO_SAVESTATE_ERROR_PATH);
+}
+
 void retro_process_pending_savestate_op(void) {
 	if (s_pendingSaveOp == LIBRETRO_SAVEOP_NONE)
 		return;
@@ -1746,10 +1778,27 @@ void retro_process_pending_savestate_op(void) {
 		                       ? g_engine->canSaveGameStateCurrently()
 		                       : g_engine->canLoadGameStateCurrently();
 		if (!opAllowed) {
-			// Leave the request pending and come back next frame: the engine
-			// is mid-script or mid-animation, not permanently closed. Only
-			// once the window has stayed shut for the whole budget is this a
-			// real refusal worth reporting.
+			// SCI refuses every save while gmm_save_enabled is off, so this
+			// one will not come good however long we wait. Report it as
+			// permanent on the first look rather than burning the budget --
+			// and rather than letting the frontend retry for ten seconds.
+			const bool sciSaveDisabled = (s_pendingSaveOp == LIBRETRO_SAVEOP_SAVE)
+			                             && !retro_setting_get_gmm_save_enabled()
+			                             && ConfMan.get("engineid").equalsIgnoreCase("sci");
+			if (sciSaveDisabled) {
+				const char *msg = "Save states are turned off for SCI games. Turn on \"Enable save states in SCI games\" in the settings menu.";
+				if (retro_log_cb)
+					retro_log_cb(RETRO_LOG_WARN, "[scummvm] %s\n", msg);
+				libretro_write_savestate_error(true, msg);
+				s_saveOpSucceeded = false;
+				s_pendingSaveOp = LIBRETRO_SAVEOP_NONE;
+				return;
+			}
+
+			// Otherwise the engine is mid-script or mid-animation, not
+			// permanently closed: leave the request pending and come back next
+			// frame. Only once the window has stayed shut for the whole budget
+			// is this a real refusal worth reporting.
 			if (++s_saveOpRefusals < LIBRETRO_SAVESTATE_MAX_REFUSALS)
 				return;
 
@@ -1757,20 +1806,11 @@ void retro_process_pending_savestate_op(void) {
 				retro_log_cb(RETRO_LOG_WARN, "[scummvm] %s refused for %d frames, giving up.\n",
 				             s_pendingSaveOp == LIBRETRO_SAVEOP_SAVE ? "Save" : "Load",
 				             s_saveOpRefusals);
-			// "Not available right now" is true of an engine that is merely
-			// busy, and misleading for the one case where the refusal is
-			// permanent: SCI declines every save unless gmm_save_enabled is
-			// set, so the answer will not change until the user turns the
-			// option on. Name the setting instead of letting them wait for a
-			// window that never opens.
-			if (s_pendingSaveOp == LIBRETRO_SAVEOP_SAVE
-			    && !retro_setting_get_gmm_save_enabled()
-			    && ConfMan.get("engineid").equalsIgnoreCase("sci"))
-				retro_osd_notification("Turn on \"Enable save states in SCI games\" in the settings menu");
-			else
-				retro_osd_notification(s_pendingSaveOp == LIBRETRO_SAVEOP_SAVE
-				                       ? "Saving is not available right now"
-				                       : "Loading is not available right now");
+			const char *busy = (s_pendingSaveOp == LIBRETRO_SAVEOP_SAVE)
+			                   ? "The game is busy and cannot save right now. Try again in a moment."
+			                   : "The game is busy and cannot load right now. Try again in a moment.";
+			libretro_write_savestate_error(false, busy);
+			retro_osd_notification(busy);
 			s_saveOpSucceeded = false;
 			s_pendingSaveOp = LIBRETRO_SAVEOP_NONE;
 			return;
@@ -1903,6 +1943,7 @@ bool retro_serialize(void *data, size_t size) {
 	s_pendingSaveOp = LIBRETRO_SAVEOP_SAVE;
 	s_saveOpArmed = false;
 	s_saveOpRefusals = 0;
+	libretro_clear_savestate_error();
 	s_saveOpSucceeded = false;
 	s_saveStateBytes.clear();
 	// The packer drops extra saves that do not fit; tell it what the frontend
@@ -1957,6 +1998,7 @@ bool retro_unserialize(const void *data, size_t size) {
 	s_pendingSaveOp = LIBRETRO_SAVEOP_LOAD;
 	s_saveOpArmed = false;
 	s_saveOpRefusals = 0;
+	libretro_clear_savestate_error();
 	s_saveOpSucceeded = false;
 
 	for (int i = 0; s_pendingSaveOp != LIBRETRO_SAVEOP_NONE && i < LIBRETRO_SAVESTATE_MAX_SWITCHES; i++)
