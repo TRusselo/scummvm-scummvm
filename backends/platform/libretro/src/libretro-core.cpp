@@ -1793,6 +1793,9 @@ void retro_process_pending_savestate_op(void) {
 				if (retro_log_cb)
 					retro_log_cb(RETRO_LOG_WARN, "[scummvm] %s\n", msg);
 				libretro_write_savestate_error(true, msg);
+				// Invisible under EmulatorJS, but this backend also runs on
+				// frontends that do draw it -- keep both refusal paths equal.
+				retro_osd_notification(msg);
 				s_saveOpSucceeded = false;
 				s_pendingSaveOp = LIBRETRO_SAVEOP_NONE;
 				return;
