@@ -31,6 +31,7 @@
 #include "backends/platform/libretro/include/libretro-os.h"
 #include "backends/platform/libretro/include/libretro-options-widget.h"
 #include "backends/platform/libretro/include/libretro-fs.h"
+#include "backends/platform/libretro/include/libretro-engine-data.h"
 
 #ifdef EMSCRIPTEN
 #include <emscripten.h>
@@ -352,15 +353,18 @@ void OSystem_libretro::addSysArchivesToSearchSet(Common::SearchSet &s, int prior
 	if (!s_systemDir.empty())
 		s.add("systemDir", new Common::FSDirectory(Common::FSNode(Common::Path(s_systemDir))), priority);
 
-	// Engine-data files (fonts.dat, toon.dat, etc.) are compiled directly
-	// into this WASM build at /engine-data via --embed-file in
-	// build/build-retroarch-core.sh, since there is no persistent, shared
-	// system directory available across ROM launches in the browser
-	// sandbox the way there is on desktop platforms. See
-	// docs/superpowers/specs/2026-09-02-wasm-engine-data-embed-design.md.
+	// Engine-data files (fonts.dat, toon.dat, etc.) are published next to the
+	// core rather than embedded in it, and fetched on first read. Registration
+	// does no I/O: this runs from SearchManager::clear(), which can be reached
+	// before the frontend's log callback is piped. See
+	// docs/superpowers/specs/2026-09-14-engine-data-on-demand-design.md.
+#ifdef EMSCRIPTEN
+	s.add("remoteEngineData", new LibretroRemoteEngineData(Common::String()), priority);
+#else
 	Common::FSNode embeddedEngineData{Common::Path("/engine-data")};
 	if (embeddedEngineData.isDirectory())
 		s.add("embeddedEngineData", new Common::FSDirectory(embeddedEngineData), priority);
+#endif
 
 	// Add the current dir as a very last resort (cf. bug #3984).
 	// TODO: check if it's really needed
