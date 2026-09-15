@@ -2020,6 +2020,12 @@ bool retro_unserialize(const void *data, size_t size) {
 		return false;
 	}
 
+	// Every other exit from this function says why it failed; this one used to
+	// return false in silence, which reads in a log as though the core was
+	// never asked at all.
+	if (!s_saveOpSucceeded && retro_log_cb)
+		retro_log_cb(RETRO_LOG_WARN, "[scummvm] The engine did not accept the save state.\n");
+
 	return s_saveOpSucceeded;
 }
 void retro_cheat_reset(void) {}
