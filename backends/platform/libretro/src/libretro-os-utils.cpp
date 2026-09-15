@@ -132,14 +132,6 @@ bool OSystem_libretro::parseGameName(const Common::String &gameName, Common::Str
 	return false;
 }
 
-bool OSystem_libretro::hasFeature(Feature f) {
-#ifdef EMSCRIPTEN
-	if (f == kFeatureOpenUrl)
-		return true;
-#endif
-	return ModularGraphicsBackend::hasFeature(f);
-}
-
 bool OSystem_libretro::openUrl(const Common::String &url) {
 #ifdef EMSCRIPTEN
 	// Called on the emu thread; window.open() only exists on the main thread.

@@ -114,6 +114,14 @@ Audio::Mixer *OSystem_libretro::getMixer() {
 	return _mixer;
 }
 
+bool OSystem_libretro::hasFeature(Feature f) {
+#ifdef EMSCRIPTEN
+	if (f == kFeatureOpenUrl)
+		return true;
+#endif
+	return ModularGraphicsBackend::hasFeature(f);
+}
+
 void OSystem_libretro::refreshRetroSettings() {
 	/* SCI's GameFeatures::canSaveFromGMM() returns false unless
 	 * "gmm_save_enabled" is set, so no SCI game can save-state at all. The
