@@ -12,7 +12,7 @@ DEPS_FOLDER_libretro-deps   := libretro-deps
 # tolerate but WASM's call_indirect traps on. Submitted upstream as
 # libretro/libretro-deps#15; revert to the upstream URL/commit once merged.
 DEPS_URL_libretro-deps      := https://github.com/TRusselo/libretro-deps
-DEPS_COMMIT_libretro-deps   := 7e18f86dcbef680588fda82d7f461860b91a0fce
+DEPS_COMMIT_libretro-deps   := 738db66790056849209e0e522726f9a90261a7fc
 
 DEPS_FOLDER_libretro-common := libretro-common
 DEPS_URL_libretro-common    := https://github.com/libretro/libretro-common
