@@ -1795,7 +1795,7 @@ void retro_process_pending_savestate_op(void) {
 				libretro_write_savestate_error(true, msg);
 				// Invisible under EmulatorJS, but this backend also runs on
 				// frontends that do draw it -- keep both refusal paths equal.
-				retro_osd_notification(msg);
+				retro_osd_notification(msg, RETRO_LOG_WARN);
 				s_saveOpSucceeded = false;
 				s_pendingSaveOp = LIBRETRO_SAVEOP_NONE;
 				return;
@@ -1816,7 +1816,7 @@ void retro_process_pending_savestate_op(void) {
 			                   ? "The game is busy and cannot save right now. Try again in a moment."
 			                   : "The game is busy and cannot load right now. Try again in a moment.";
 			libretro_write_savestate_error(false, busy);
-			retro_osd_notification(busy);
+			retro_osd_notification(busy, RETRO_LOG_WARN);
 			s_saveOpSucceeded = false;
 			s_pendingSaveOp = LIBRETRO_SAVEOP_NONE;
 			return;
