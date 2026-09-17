@@ -1896,7 +1896,16 @@ void retro_process_pending_savestate_op(void) {
 		// as success here matches how libretro frontends already use this
 		// API elsewhere: best-effort, not a strict guarantee.
 		s_saveOpSucceeded = true;
-		libretro_remove_reserved_save();
+
+		// The reserved slot is deliberately NOT removed here. Several engines
+		// only note the request now and read the file later from their own
+		// loop -- m4 sets kernel.restore_slot and restores at the top of
+		// m4_inflight(), griffon and illusions do the same -- and none of them
+		// override isSaveOrLoadPending(), so there is nothing to wait on.
+		// Deleting it here took the file out from under m4 mid-restore, and
+		// kernel_load_game() then called error("Could not restore save slot
+		// 200"), which is fatal. The next save removes it and the next load
+		// overwrites it, so it does not accumulate.
 	}
 
 	s_saveOpArmed = false;
