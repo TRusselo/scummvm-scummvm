@@ -100,8 +100,8 @@ public:
 	Common::String getSaveStateName(int slot) const override;
 	Common::Error loadGameState(int slot) override;
 	Common::Error saveGameState(int slot, const Common::String &desc, bool isAutosave = false) override;
-	bool canLoadGameStateCurrently(Common::U32String *msg = nullptr) override { return true; }
-	bool canSaveGameStateCurrently(Common::U32String *msg = nullptr) override { return !_sceneBusy; }
+	bool canLoadGameStateCurrently(Common::U32String *msg = nullptr) override { return _gameRunning && !_sceneBusy; }
+	bool canSaveGameStateCurrently(Common::U32String *msg = nullptr) override { return _gameRunning && !_sceneBusy; }
 	bool hasFeature(EngineFeature f) const override;
 
 	void init();
@@ -189,6 +189,7 @@ private:
 	bool trySelectedObject();
 
 	bool _sceneBusy;
+	bool _gameRunning;
 	Action _action;
 	Object *_dstObject;
 

@@ -1795,9 +1795,10 @@ void retro_process_pending_savestate_op(void) {
 		//
 		// Checked before the load branch writes anything, so a refused load
 		// leaves no half-written slot file behind.
+		Common::U32String refusalMsg;
 		const bool opAllowed = (s_pendingSaveOp == LIBRETRO_SAVEOP_SAVE)
-		                       ? g_engine->canSaveGameStateCurrently()
-		                       : g_engine->canLoadGameStateCurrently();
+		                       ? g_engine->canSaveGameStateCurrently(&refusalMsg)
+		                       : g_engine->canLoadGameStateCurrently(&refusalMsg);
 		if (!opAllowed) {
 			// SCI refuses every save while gmm_save_enabled is off, so this
 			// one will not come good however long we wait. Report it as
@@ -1830,9 +1831,15 @@ void retro_process_pending_savestate_op(void) {
 				retro_log_cb(RETRO_LOG_WARN, "[scummvm] %s refused for %d frames, giving up.\n",
 				             s_pendingSaveOp == LIBRETRO_SAVEOP_SAVE ? "Save" : "Load",
 				             s_saveOpRefusals);
+			// The engine's own wording when it gave one: "waiting for the
+			// scene to end" is wrong for AGI, which refuses whenever its
+			// command prompt is disabled, and that is not a scene ending.
+			const Common::String engineMsg = refusalMsg.encode();
 			const char *busy = (s_pendingSaveOp == LIBRETRO_SAVEOP_SAVE)
 			                   ? "The game is busy and cannot save right now. Try again in a moment."
 			                   : "The game is busy and cannot load right now. Try again in a moment.";
+			if (!engineMsg.empty())
+				busy = engineMsg.c_str();
 			libretro_write_savestate_error(false, busy);
 			retro_osd_notification(busy, RETRO_LOG_WARN);
 			s_saveOpSucceeded = false;
