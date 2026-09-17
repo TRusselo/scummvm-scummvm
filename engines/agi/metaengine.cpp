@@ -448,20 +448,30 @@ bool AgiBase::canLoadGameStateCurrently(Common::U32String *msg) {
 		return false;
 	}
 
-	if (getFlag(VM_FLAG_MENUS_ACCESSIBLE)) {
-		if (!_noSaveLoadAllowed) {
-			if (!cycleInnerLoopIsActive()) {
-				// We can't allow to restore a game, while inner loop is active
-				// For example Mixed Up Mother Goose has an endless loop for user name input
-				// Which means even if we abort the inner loop, the game would keep on calling
-				// GetString() until something is entered. And this would of course also happen
-				// right after restoring a saved game.
-				return true;
-			}
-		}
+	if (!getFlag(VM_FLAG_MENUS_ACCESSIBLE)) {
+		if (msg)
+			*msg = _("Restoring is not allowed at this point in the game");
+		return false;
 	}
 
-	return false;
+	if (_noSaveLoadAllowed) {
+		if (msg)
+			*msg = _("Restoring is not allowed while a message is displayed");
+		return false;
+	}
+
+	// We can't allow to restore a game, while inner loop is active
+	// For example Mixed Up Mother Goose has an endless loop for user name input
+	// Which means even if we abort the inner loop, the game would keep on calling
+	// GetString() until something is entered. And this would of course also happen
+	// right after restoring a saved game.
+	if (cycleInnerLoopIsActive()) {
+		if (msg)
+			*msg = _("Restoring is not allowed while the game is waiting for input");
+		return false;
+	}
+
+	return true;
 }
 
 bool AgiBase::canSaveGameStateCurrently(Common::U32String *msg) {
@@ -474,17 +484,31 @@ bool AgiBase::canSaveGameStateCurrently(Common::U32String *msg) {
 	if (getGameID() == GID_BC) // Technically in Black Cauldron we may save anytime
 		return true;
 
-	if (getFlag(VM_FLAG_MENUS_ACCESSIBLE)) {
-		if (!_noSaveLoadAllowed) {
-			if (!cycleInnerLoopIsActive()) {
-				if (promptIsEnabled()) {
-					return true;
-				}
-			}
-		}
+	if (!getFlag(VM_FLAG_MENUS_ACCESSIBLE)) {
+		if (msg)
+			*msg = _("Saving is not allowed at this point in the game");
+		return false;
 	}
 
-	return false;
+	if (_noSaveLoadAllowed) {
+		if (msg)
+			*msg = _("Saving is not allowed while a message is displayed");
+		return false;
+	}
+
+	if (cycleInnerLoopIsActive()) {
+		if (msg)
+			*msg = _("Saving is not allowed while the game is waiting for input");
+		return false;
+	}
+
+	if (!promptIsEnabled()) {
+		if (msg)
+			*msg = _("Saving is not allowed while the command prompt is disabled");
+		return false;
+	}
+
+	return true;
 }
 
 } // End of namespace Agi

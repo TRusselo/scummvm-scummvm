@@ -83,6 +83,7 @@ TeenAgentEngine::TeenAgentEngine(OSystem *system, const ADGameDescription *gd)
 	scene = 0;
 	inventory = 0;
 	_sceneBusy = false;
+	_gameRunning = false;
 	_dstObject = 0;
 	_musicStream = 0;
 	_markDelay = 0;
@@ -645,6 +646,7 @@ Common::Error TeenAgentEngine::run() {
 	}
 
 	CursorMan.showMouse(true);
+	_gameRunning = true;
 
 	uint32 gameTimer = 0;
 	uint32 markTimer = 0;
