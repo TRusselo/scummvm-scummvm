@@ -1513,8 +1513,17 @@ static const int LIBRETRO_SAVESTATE_MAX_SWITCHES = 600;
 //
 // So this covers only a momentary refusal. Waiting for a scene to finish
 // belongs in the frontend, where the game keeps running and drawing between
-// attempts -- see patches/04-savestate-retry.patch.
-static const int LIBRETRO_SAVESTATE_MAX_REFUSALS = 10;
+// attempts -- see patches/04-savestate-retry.patch and 09-loadstate-retry.patch.
+//
+// One, not ten. Now that both a save and a load are retried from the frontend,
+// any budget here is only a stall the player can see: the block lasts as long
+// as the engine takes to make this many pollEvent() calls, and the canvas does
+// not update for it. Measured on Kyrandia 2 launching from a save state, ten
+// showed as a fade cycling every ~660ms -- 400ms of frontend wait plus ~260ms
+// of frozen tab -- and the cycle shortened to 95ms as the engine's polling got
+// denser and burned the budget quicker. Refusing on the first ask makes a
+// refusal nearly free and leaves the waiting where it belongs.
+static const int LIBRETRO_SAVESTATE_MAX_REFUSALS = 1;
 
 // Frames to wait for ScummVM to construct an engine before giving up on a
 // save-state request. A frontend can ask for a load the instant the core
@@ -1580,6 +1589,16 @@ static void libretro_append_entry(Common::Array<byte> &out, const Common::String
 	libretro_append_u32(out, data.size());
 	for (uint i = 0; i < data.size(); i++)
 		out.push_back(data[i]);
+}
+
+// The reserved slot is a real savegame while it exists, so an engine lists it
+// in its own load menu next to the player's (Kyrandia 2 showed it as "libretro
+// savestate" beside "save"). It is only ever a courier: written, read into the
+// state blob, and of no use afterwards.
+static void libretro_remove_reserved_save(void) {
+	if (!g_engine)
+		return;
+	g_system->getSavefileManager()->removeSavefile(g_engine->getSaveStateName(LIBRETRO_SAVESTATE_SLOT));
 }
 
 static bool libretro_read_save_file(const Common::String &name, Common::Array<byte> &out) {
@@ -1861,6 +1880,7 @@ void retro_process_pending_savestate_op(void) {
 		s_saveStateBytes.clear();
 		libretro_pack_savestate(s_saveStateBytes);
 		s_saveOpSucceeded = !s_saveStateBytes.empty();
+		libretro_remove_reserved_save();
 	} else {
 		// loadGameState() reporting kNoError only means the request was
 		// accepted, not that the load actually succeeded (see the comment on
@@ -1870,6 +1890,7 @@ void retro_process_pending_savestate_op(void) {
 		// as success here matches how libretro frontends already use this
 		// API elsewhere: best-effort, not a strict guarantee.
 		s_saveOpSucceeded = true;
+		libretro_remove_reserved_save();
 	}
 
 	s_saveOpArmed = false;
