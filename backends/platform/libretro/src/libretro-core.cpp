@@ -1515,15 +1515,14 @@ static const int LIBRETRO_SAVESTATE_MAX_SWITCHES = 600;
 // belongs in the frontend, where the game keeps running and drawing between
 // attempts -- see patches/04-savestate-retry.patch and 09-loadstate-retry.patch.
 //
-// One, not ten. Now that both a save and a load are retried from the frontend,
-// any budget here is only a stall the player can see: the block lasts as long
-// as the engine takes to make this many pollEvent() calls, and the canvas does
-// not update for it. Measured on Kyrandia 2 launching from a save state, ten
-// showed as a fade cycling every ~660ms -- 400ms of frontend wait plus ~260ms
-// of frozen tab -- and the cycle shortened to 95ms as the engine's polling got
-// denser and burned the budget quicker. Refusing on the first ask makes a
-// refusal nearly free and leaves the waiting where it belongs.
-static const int LIBRETRO_SAVESTATE_MAX_REFUSALS = 1;
+// Ten, and don't lower it. Dropping to one was tried on the theory that the
+// visible fade during a load was this block; it is not -- the fade happens on
+// a load that SUCCEEDS, so a cheaper refusal buys nothing. What a smaller
+// budget does cost is hit rate: pollEvent() is called from many places, and
+// only the calls inside an engine's own input handling see its save gate open
+// (Kyra sets _isSaveAllowed for the duration of updateInput() alone). Fewer
+// asks per attempt means proportionally fewer chances to land in that window.
+static const int LIBRETRO_SAVESTATE_MAX_REFUSALS = 10;
 
 // Frames to wait for ScummVM to construct an engine before giving up on a
 // save-state request. A frontend can ask for a load the instant the core
