@@ -6,13 +6,8 @@
 DEPS_SUBMODULES             := libretro-deps libretro-common
 
 DEPS_FOLDER_libretro-deps   := libretro-deps
-# Temporary fork pin: fixes two FreeType autofit function-pointer signature
-# mismatches (AF_WritingSystem_ApplyHintsFunc's return type, and
-# af_dummy_hints_apply's missing `metrics' parameter) that native ABIs
-# tolerate but WASM's call_indirect traps on. Submitted upstream as
-# libretro/libretro-deps#15; revert to the upstream URL/commit once merged.
-DEPS_URL_libretro-deps      := https://github.com/TRusselo/libretro-deps
-DEPS_COMMIT_libretro-deps   := 738db66790056849209e0e522726f9a90261a7fc
+DEPS_URL_libretro-deps      := https://github.com/libretro/libretro-deps
+DEPS_COMMIT_libretro-deps   := e639e0c26fdbbacd7a9ab70a831c4def406a4e3e
 
 DEPS_FOLDER_libretro-common := libretro-common
 DEPS_URL_libretro-common    := https://github.com/libretro/libretro-common
