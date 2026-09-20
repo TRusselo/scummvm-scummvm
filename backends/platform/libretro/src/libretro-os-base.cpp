@@ -124,9 +124,9 @@ bool OSystem_libretro::hasFeature(Feature f) {
 
 void OSystem_libretro::refreshRetroSettings() {
 	/* SCI's GameFeatures::canSaveFromGMM() returns false unless
-	 * "gmm_save_enabled" is set, so no SCI game can save-state at all. The
-	 * ScummVM GUI toggle for it cannot help under a frontend whose config file
-	 * does not survive a reload, so take it from the core option instead.
+	 * "gmm_save_enabled" is set, so no SCI game can save-state at all. Taking
+	 * it from the core option puts it beside the other core settings, rather
+	 * than only in ScummVM's own GUI.
 	 *
 	 * The transient domain is where command-line settings land, so this
 	 * behaves exactly like passing the setting on the command line and is

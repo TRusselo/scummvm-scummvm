@@ -233,6 +233,17 @@ void OSystem_libretro::applyBackendSettings() {
 	if (! LibRetroFilesystemNode(s_soundfontPath).exists())
 		s_soundfontPath.clear();
 
+	/* Both graphics backends return false from gameNeedsAspectRatioCorrection(),
+	 * so the feature is never applied here and the setting has no visual effect.
+	 * ScummVM's global default is true (base/commandLine.cpp), which is enough
+	 * on its own to make SCUMM v3 FM-TOWNS games open a modal at startup saying
+	 * the correction cannot be applied. That modal runs its own event loop, so
+	 * it also blocks a state load until it is dismissed.
+	 *
+	 * A default rather than a transient override: an explicit setting, global
+	 * or per game, still wins. */
+	ConfMan.registerDefault("aspect_ratio", false);
+
 	//Register default paths
 	if (! s_homeDir.empty()) {
 		ConfMan.registerDefault("browser_lastpath", s_homeDir);
