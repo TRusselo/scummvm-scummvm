@@ -1808,7 +1808,10 @@ void retro_process_pending_savestate_op(void) {
 			                             && !retro_setting_get_gmm_save_enabled()
 			                             && ConfMan.get("engineid").equalsIgnoreCase("sci");
 			if (sciSaveDisabled) {
-				const char *msg = "Save states are turned off for SCI games. Turn on \"Enable save states in SCI games\" in the settings menu.";
+				// Leads with the action, not the diagnosis: this is read off a
+				// message that clears itself, and the first few words are the
+				// ones that land.
+				const char *msg = "To use save states in SCI games, turn on \"Enable save states in SCI games\" in the settings menu.";
 				if (retro_log_cb)
 					retro_log_cb(RETRO_LOG_WARN, "[scummvm] %s\n", msg);
 				libretro_write_savestate_error(true, msg);
@@ -1832,8 +1835,8 @@ void retro_process_pending_savestate_op(void) {
 			// command prompt is disabled, and that is not a scene ending.
 			const Common::String engineMsg = refusalMsg.encode();
 			const char *busy = (s_pendingSaveOp == LIBRETRO_SAVEOP_SAVE)
-			                   ? "The game is busy and cannot save right now. Try again in a moment."
-			                   : "The game is busy and cannot load right now. Try again in a moment.";
+			                   ? "Try again in a moment - the game is busy and cannot save right now."
+			                   : "Try again in a moment - the game is busy and cannot load right now.";
 			if (!engineMsg.empty())
 				busy = engineMsg.c_str();
 			// The reason is logged, not just drawn: displayMessage() writes a
