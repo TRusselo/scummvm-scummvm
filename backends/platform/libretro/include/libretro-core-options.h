@@ -184,7 +184,11 @@ struct retro_core_option_v2_definition option_defs_us[] = {
 			{"3.0", NULL},
 			{NULL, NULL},
 		},
+#ifdef EMSCRIPTEN
+		"0.2"
+#else
 		"1.0"
+#endif
 	},
 	{
 		"scummvm_mouse_fine_control_speed_reduction",

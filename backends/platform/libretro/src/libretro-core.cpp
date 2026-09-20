@@ -90,7 +90,15 @@ static int analog_deadzone = (int)(0.15f * ANALOG_RANGE);
 static float gamepad_cursor_speed = 1.0f;
 static bool analog_response_is_quadratic = false;
 
-static float mouse_speed = 1.0f;
+// Kept in step with the option default in libretro-core-options.h, which is
+// lower under emscripten: the browser reports deltas against the canvas, not
+// the game surface.
+#ifdef EMSCRIPTEN
+#define LIBRETRO_DEFAULT_MOUSE_SPEED 0.2f
+#else
+#define LIBRETRO_DEFAULT_MOUSE_SPEED 1.0f
+#endif
+static float mouse_speed = LIBRETRO_DEFAULT_MOUSE_SPEED;
 static float gamepad_acceleration_time = 0.2f;
 static int mouse_fine_control_speed_reduction = 4;
 static int pointer_device = RETRO_DEVICE_JOYPAD; // default pointer/mouse device
@@ -379,7 +387,7 @@ static void update_variables(void) {
 
 	var.key = "scummvm_mouse_speed";
 	var.value = NULL;
-	mouse_speed = 1.0f;
+	mouse_speed = LIBRETRO_DEFAULT_MOUSE_SPEED;
 	if (environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var) && var.value) {
 		mouse_speed = (float)atof(var.value);
 	}
