@@ -1827,10 +1827,6 @@ void retro_process_pending_savestate_op(void) {
 			if (++s_saveOpRefusals < LIBRETRO_SAVESTATE_MAX_REFUSALS)
 				return;
 
-			if (retro_log_cb)
-				retro_log_cb(RETRO_LOG_WARN, "[scummvm] %s refused for %d frames, giving up.\n",
-				             s_pendingSaveOp == LIBRETRO_SAVEOP_SAVE ? "Save" : "Load",
-				             s_saveOpRefusals);
 			// The engine's own wording when it gave one: "waiting for the
 			// scene to end" is wrong for AGI, which refuses whenever its
 			// command prompt is disabled, and that is not a scene ending.
@@ -1840,6 +1836,15 @@ void retro_process_pending_savestate_op(void) {
 			                   : "The game is busy and cannot load right now. Try again in a moment.";
 			if (!engineMsg.empty())
 				busy = engineMsg.c_str();
+			// The reason is logged, not just drawn: displayMessage() writes a
+			// div and clears it on a timer, the OSD is invisible under
+			// EmulatorJS, and the frontend's own console line is RetroArch's
+			// generic "Error writing data" for any serialize failure. Without
+			// this the log cannot say why a save was refused.
+			if (retro_log_cb)
+				retro_log_cb(RETRO_LOG_WARN, "[scummvm] %s refused for %d frames, giving up: %s\n",
+				             s_pendingSaveOp == LIBRETRO_SAVEOP_SAVE ? "Save" : "Load",
+				             s_saveOpRefusals, busy);
 			libretro_write_savestate_error(false, busy);
 			retro_osd_notification(busy, RETRO_LOG_WARN);
 			s_saveOpSucceeded = false;
