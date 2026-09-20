@@ -821,18 +821,9 @@ static void exit_to_frontend(void) {
 static const int LIBRETRO_QUIT_MAX_SWITCHES = 600;
 
 static void close_emu_thread(void) {
-	// This loop used to be unbounded. Every iteration pushes another
-	// EVENT_QUIT and hands the emulator thread a timeslice, waiting for the
-	// engine to observe the event and return from scummvm_main(). An engine
-	// that keeps yielding but never observes the quit spins here forever,
-	// and because this runs on the frontend's own thread the whole browser
-	// tab locks up with nothing logged. Griffon does exactly that: its
-	// checkInputs() returns early while _attacking or _forcePause is set,
-	// and that early return sits above its EVENT_QUIT check, so the event is
-	// discarded (upstream ScummVM has the same ordering). Give up after a
-	// bounded number of attempts and tear down anyway -- a leaked engine
-	// thread on a core that is being unloaded is far cheaper than a hung
-	// tab. Mirrors LIBRETRO_SAVESTATE_MAX_SWITCHES in the save-state bridge.
+	// Bounded because this runs on the frontend's own thread: an engine that
+	// yields without observing EVENT_QUIT would hang the tab with nothing
+	// logged. A leaked engine thread on an unloading core is cheaper.
 	int switches = 0;
 	while (retro_emu_thread_started() && !retro_emu_thread_exited()) {
 		if (switches++ >= LIBRETRO_QUIT_MAX_SWITCHES) {
@@ -1210,22 +1201,9 @@ bool retro_load_game(const struct retro_game_info *game) {
 		// Retrieve the game path.
 		Common::FSNode detect_target = Common::FSNode(game->path);
 #ifdef EMSCRIPTEN
-		// In this WASM/EmulatorJS deployment, the virtual filesystem root
-		// ("/") is always exactly the current ROM's fully-extracted content
-		// tree -- EmulatorJS's downloadRom() extracts every zip entry
-		// preserving its relative path under "/", and nothing else is ever
-		// mounted there for this core. Scanning from the anchor file's own
-		// parent directory (the upstream default below, correct for a real
-		// shared filesystem where many games' content might coexist in
-		// sibling folders) is an unnecessary restriction here: it makes
-		// detection depend on which arbitrary file EmulatorJS's
-		// fileNames[0] heuristic happened to pick as game->path, breaking
-		// any ROM whose zip doesn't happen to have its detection-relevant
-		// anchor at the true top level. Using the true root instead lets
-		// ScummVM's own directoryGlobs-based scan (already correct on
-		// desktop platforms) work for any packaging. Guarded to this WASM
-		// build only -- on a native build of this shared source, "/" is the
-		// real OS root and this override would be wrong.
+		// Under Emscripten "/" is exactly this ROM's extracted tree, so scanning
+		// from it avoids depending on which file the frontend picked as
+		// game->path. Guarded to this build: elsewhere "/" is the OS root.
 		Common::FSNode parent_dir = Common::FSNode(Common::Path("/"));
 #else
 		Common::FSNode parent_dir = detect_target.getParent();
@@ -1421,63 +1399,18 @@ size_t retro_get_memory_size(unsigned type) {
 	return 0;
 }
 
-/*
- * Save-state bridge.
- *
- * ScummVM has no API to serialize a running engine's state into a memory
- * buffer -- Engine::saveGameState()/loadGameState() only know how to read
- * and write named slots via the SaveFileManager. So retro_serialize() and
- * retro_unserialize() are implemented by driving a *real* engine save/load
- * into a reserved slot, then copying that slot's save file bytes to/from
- * the buffer libretro gives us. This reuses the exact same save mechanism
- * as ScummVM's own in-game "Save"/"Load" menu (which already works, and
- * whose saves already persist across a reload) -- retro_serialize just
- * makes that mechanism reachable through EmulatorJS's/RetroArch's own
- * save-state UI (Save State, Exit & Save) instead of requiring the GMM.
- *
- * retro_serialize()/retro_unserialize() are called by the frontend from
- * what this backend calls the "main" thread -- see libretro-threads.cpp.
- * g_engine and everything reachable from it belong to the "emu thread",
- * which is a real pthread parked wherever the running engine last yielded
- * (see retro_switch_to_emu_thread()/retro_switch_to_main_thread()); it is
- * NOT safe to call g_engine->saveGameState()/loadGameState() directly from
- * here. Instead we set a pending-operation flag, drive the emu thread
- * forward with retro_switch_to_emu_thread() (exactly as retro_run() does
- * once per frame), and let retro_process_pending_savestate_op() -- called
- * from OSystem_libretro::pollEvent(), which runs on the emu thread --
- * actually do the work and report back.
- *
- * A further wrinkle: some engines' saveGameState()/loadGameState() (e.g.
- * SCUMM's) don't do the file I/O synchronously -- they just arm an
- * internal flag for their own main loop to act on later (see
- * Engine::isSaveOrLoadPending()). retro_process_pending_savestate_op()
- * accounts for this by waiting for isSaveOrLoadPending() to clear before
- * treating the request as finished, which may take more than one
- * pollEvent() call.
- */
+/* retro_serialize()/retro_unserialize() run on the main thread; g_engine
+ * belongs to the emu thread and must not be touched here. The work is flagged
+ * and done by retro_process_pending_savestate_op() from pollEvent(), which
+ * waits for Engine::isSaveOrLoadPending() to clear. */
 
-// Slot 0 is generally the autosave slot, and SCUMM treats slot 100 as a
-// special temporary-restart slot (see ScummEngine::requestLoad) -- 200 is
-// comfortably outside both the autosave slot and SCUMM's normal UI-visible
-// save slot range (0-99, see ScummMetaEngine::getMaximumSaveSlot()).
-// Must also fit in a byte: ScummEngine::_saveLoadSlot (scumm.h) is declared
-// `byte`, so a slot >255 (990 was tried first) silently truncates mod 256
-// -- SCUMM actually wrote and read a completely different slot than the one
-// this code asked for and later tried to read back, with no error anywhere
-// in the chain to indicate the mismatch.
+// Must fit in a byte: ScummEngine::_saveLoadSlot is `byte`, so a larger slot
+// truncates mod 256 silently. Also clear of the autosave slot and SCUMM's
+// 0-99 UI range.
 static const int LIBRETRO_SAVESTATE_SLOT = 200;
 
-// retro_serialize_size() used to return a flat 8 MiB. The frontend writes
-// whatever that call reports -- it never learns how much was actually used
-// (tasks/task_save.c takes _len from core_serialize_size() and writes the
-// whole buffer) -- so every save state was 8 MiB of mostly zero padding, and
-// raising the bound to fit a large-save engine would have inflated all of
-// them. The size is now estimated from the saves the target actually has, so
-// most states are a fraction of that and the ceiling can be generous without
-// anyone paying for it. These two clamp the estimate.
-//
-// The floor matters more than the ceiling: an estimate that comes in under
-// what packing needs makes retro_serialize() fail, so err high.
+// Clamp the estimate. The floor matters more than the ceiling: an estimate
+// under what packing needs makes retro_serialize() fail, so err high.
 static const size_t LIBRETRO_SAVESTATE_MIN_SIZE = 1 * 1024 * 1024;
 static const size_t LIBRETRO_SAVESTATE_MAX_SIZE = 64 * 1024 * 1024;
 
@@ -1499,29 +1432,14 @@ static size_t s_saveStateBudget = LIBRETRO_SAVESTATE_MIN_SIZE;
 // giving up and reporting failure rather than hanging the frontend forever.
 static const int LIBRETRO_SAVESTATE_MAX_SWITCHES = 600;
 
-// Frames to keep re-asking an engine that answered "not right now" before
-// giving up on the request. canSave/canLoadGameStateCurrently() report whether
-// this instant is safe, not whether the operation is ever possible.
+// Frames to re-ask an engine that answered "not right now". Small on purpose:
+// each retry holds the main thread for ~8ms with nothing drawn, so a budget
+// long enough to outlast a scene would freeze the tab. Waiting for a scene
+// belongs in the frontend, which keeps drawing between attempts.
 //
-// Deliberately small. Each retry is a retro_switch_to_emu_thread(), which
-// hands the main thread to the emulator and blocks until it yields ~8ms later
-// (LibretroTimerManager::_interval, half a frame at the current refresh rate).
-// The engine does advance -- but nothing is drawn while we hold the thread, so
-// every frame of budget is a frame of frozen frontend. 180 measured ~1.9s of
-// dead tab and still did not outlast a Riven animation, which runs for
-// seconds: waiting long enough to help costs more than the help is worth.
-//
-// So this covers only a momentary refusal. Waiting for a scene to finish
-// belongs in the frontend, where the game keeps running and drawing between
-// attempts -- see patches/04-savestate-retry.patch and 09-loadstate-retry.patch.
-//
-// Ten, and don't lower it. Dropping to one was tried on the theory that the
-// visible fade during a load was this block; it is not -- the fade happens on
-// a load that SUCCEEDS, so a cheaper refusal buys nothing. What a smaller
-// budget does cost is hit rate: pollEvent() is called from many places, and
-// only the calls inside an engine's own input handling see its save gate open
-// (Kyra sets _isSaveAllowed for the duration of updateInput() alone). Fewer
-// asks per attempt means proportionally fewer chances to land in that window.
+// Do not lower it. pollEvent() is called from many places and only the calls
+// inside an engine's own input handling see its save gate open, so fewer asks
+// per attempt means proportionally fewer chances to land in that window.
 static const int LIBRETRO_SAVESTATE_MAX_REFUSALS = 10;
 
 // Frames to wait for ScummVM to construct an engine before giving up on a
@@ -1548,25 +1466,13 @@ static bool s_saveOpArmed = false;
 static bool s_saveOpSucceeded = false;
 static Common::Array<byte> s_saveStateBytes;
 
-// Save-state payload container.
+// Save-state payload: magic, entry count, then a name and bytes per entry.
+// The reserved slot is packed first so a state stays restorable when the rest
+// do not fit.
 //
-// Originally the payload was just the reserved slot's save file, so a state
-// carried exactly one save: restore it on another device and the game resumed
-// at the right point with an empty ScummVM save list, because the player's own
-// F5 saves live in the frontend's persistent storage and never travel. A
-// normal emulator's state is a RAM dump that inherently contains the in-game
-// save; this bridge proxies to an engine save instead, so it has to carry the
-// rest deliberately.
-//
-// Layout: magic, entry count, then per entry a name and its bytes. The
-// reserved slot is packed first so a state is still restorable when the
-// remaining saves do not fit.
-//
-// A legacy payload is a bare save file, so its first four bytes are that
-// file's own header -- nothing guarantees they cannot happen to equal the
-// magic. Detection therefore does not rest on that: a payload whose magic
-// matches but whose structure does not parse is treated as legacy rather
-// than rejected, so a collision costs nothing.
+// A legacy payload is a bare save file, so its first bytes can collide with
+// the magic. A payload whose magic matches but does not parse is treated as
+// legacy rather than rejected.
 static const uint32 LIBRETRO_SAVESTATE_MAGIC = MKTAG('S', 'V', 'M', '1');
 
 static void libretro_append_u32(Common::Array<byte> &out, uint32 value) {
@@ -1738,18 +1644,11 @@ static bool libretro_unpack_savestate(const Common::Array<byte> &in) {
 	return true;
 }
 
-// Leaves the reason a save/load was refused where the frontend can read it.
+// Leaves the reason a save/load was refused where the frontend can read it:
+// the OSD reaches neither the log nor the screen here.
 //
-// The OSD is not a usable channel here: RETRO_MESSAGE_TARGET_OSD never reaches
-// the log, and EmulatorJS does not surface it on screen either, so a message
-// sent that way is invisible in both places -- which is exactly what happened
-// to the SCI guidance added earlier. The Emscripten filesystem is shared with
-// the page, so writing the reason there puts it somewhere JavaScript can
-// actually pick it up and show.
-//
-// First line is "permanent" or "temporary": a frontend that retries should
-// stop immediately on the former, because no amount of waiting will change the
-// answer. Second line is the text to show the user.
+// First line is "permanent" or "temporary", so a frontend that retries can
+// stop on the former. Second line is the text to show.
 static void libretro_write_savestate_error(bool permanent, const char *message) {
 	RFILE *f = filestream_open(LIBRETRO_SAVESTATE_ERROR_PATH,
 	                           RETRO_VFS_FILE_ACCESS_WRITE, RETRO_VFS_FILE_ACCESS_HINT_NONE);
@@ -1784,17 +1683,10 @@ void retro_process_pending_savestate_op(void) {
 		return;
 
 	if (!s_saveOpArmed) {
-		// Engines refuse save/load outside the states where it is meaningful,
-		// and say so through these two. Ignoring them is not merely impolite:
-		// an engine asked to save before it has loaded anything will happily
-		// walk into its own uninitialised state. Griffon does exactly that --
-		// canSaveGameStateCurrently() is false outside kGameModePlay, and
-		// saving anyway at its title screen reaches drawView() with no map
-		// loaded and faults. The frontend offers save-state buttons whenever a
-		// core is running, so this is reachable by a plain button press.
-		//
-		// Checked before the load branch writes anything, so a refused load
-		// leaves no half-written slot file behind.
+		// Not merely impolite to ignore: an engine asked to save before it has
+		// loaded anything walks into its own uninitialised state and faults.
+		// Checked before the load branch writes, so a refusal leaves no
+		// half-written slot behind.
 		Common::U32String refusalMsg;
 		const bool opAllowed = (s_pendingSaveOp == LIBRETRO_SAVEOP_SAVE)
 		                       ? g_engine->canSaveGameStateCurrently(&refusalMsg)
@@ -1905,32 +1797,21 @@ void retro_process_pending_savestate_op(void) {
 		// API elsewhere: best-effort, not a strict guarantee.
 		s_saveOpSucceeded = true;
 
-		// The reserved slot is deliberately NOT removed here. Several engines
-		// only note the request now and read the file later from their own
-		// loop -- m4 sets kernel.restore_slot and restores at the top of
-		// m4_inflight(), griffon and illusions do the same -- and none of them
-		// override isSaveOrLoadPending(), so there is nothing to wait on.
-		// Deleting it here took the file out from under m4 mid-restore, and
-		// kernel_load_game() then called error("Could not restore save slot
-		// 200"), which is fatal. The next save removes it and the next load
-		// overwrites it, so it does not accumulate.
+		// Not removed here: engines that defer the restore read the file from
+		// their own loop afterwards, and none override isSaveOrLoadPending(),
+		// so there is nothing to wait on. Deleting it is fatal to them. The
+		// next save removes it.
 	}
 
 	s_saveOpArmed = false;
 	s_pendingSaveOp = LIBRETRO_SAVEOP_NONE;
 }
 
-// Estimates the buffer the next state needs from the saves the target already
-// has, so the frontend allocates and writes roughly what is required instead
-// of a flat maximum.
+// Estimates the next state's buffer from the saves the target already has.
 //
-// Runs on the main thread. That is safe here for a specific reason: the main
-// and emu threads never run concurrently -- retro_switch_to_emu_thread()
-// blocks on a condition variable until the emu thread hands control back (see
-// libretro-threads.cpp) -- so there is no data race. What would be unsafe is
-// re-entering the engine, which is parked at an arbitrary yield point; this
-// only reads g_engine's save-state name and goes through the SaveFileManager,
-// a backend service, so it never re-enters.
+// Runs on the main thread, which is safe only because it does not re-enter
+// the engine: it reads g_engine's save-state name and goes through the
+// SaveFileManager. Do not add engine calls here.
 static size_t libretro_estimate_savestate_size(void) {
 	// Container header plus the outer length prefix.
 	size_t needed = 16;
