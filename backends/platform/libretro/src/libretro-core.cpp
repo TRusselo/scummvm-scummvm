@@ -1440,15 +1440,18 @@ static size_t s_saveStateBudget = LIBRETRO_SAVESTATE_MIN_SIZE;
 // giving up and reporting failure rather than hanging the frontend forever.
 static const int LIBRETRO_SAVESTATE_MAX_SWITCHES = 600;
 
-// Frames to re-ask an engine that answered "not right now". Small on purpose:
-// each retry holds the main thread for ~8ms with nothing drawn, so a budget
-// long enough to outlast a scene would freeze the tab. Waiting for a scene
-// belongs in the frontend, which keeps drawing between attempts.
+// Frames to re-ask an engine that answered "not right now". Counted in thread
+// switches, not in calls: pollEvent() runs many times per frame and at wildly
+// different rates per engine, so a call budget bounded neither how long the
+// main thread was held nor how much game time the gate was given to open. A
+// frame budget bounds both -- worst case is this many switches of ~8ms with
+// nothing drawn -- while still letting every pollEvent() within those frames
+// ask, which is what decides whether an attempt lands in an open window.
 //
-// Do not lower it. pollEvent() is called from many places and only the calls
-// inside an engine's own input handling see its save gate open, so fewer asks
-// per attempt means proportionally fewer chances to land in that window.
-static const int LIBRETRO_SAVESTATE_MAX_REFUSALS = 10;
+// Waiting longer than this belongs in the frontend, which keeps drawing
+// between attempts; holding the main thread for a whole scene would freeze
+// the tab even on this Asyncify build.
+static const int LIBRETRO_SAVESTATE_MAX_REFUSAL_FRAMES = 10;
 
 // Frames to wait for ScummVM to construct an engine before giving up on a
 // save-state request. A frontend can ask for a load the instant the core
@@ -1461,7 +1464,10 @@ static const int LIBRETRO_SAVESTATE_MAX_ENGINE_WAIT = 300;
 
 // Shared with the page: see libretro_write_savestate_error().
 #define LIBRETRO_SAVESTATE_ERROR_PATH "/savestate_error.txt"
-static int s_saveOpRefusals = 0;
+// Thread switches spent on the request in flight. Incremented by the pump
+// loops in retro_serialize()/retro_unserialize(), which are the only places
+// that know a frame has passed; the emu-thread handler only reads it.
+static int s_saveOpFrames = 0;
 
 enum LibretroSaveOp {
 	LIBRETRO_SAVEOP_NONE,
@@ -1727,7 +1733,7 @@ void retro_process_pending_savestate_op(void) {
 			// permanently closed: leave the request pending and come back next
 			// frame. Only once the window has stayed shut for the whole budget
 			// is this a real refusal worth reporting.
-			if (++s_saveOpRefusals < LIBRETRO_SAVESTATE_MAX_REFUSALS)
+			if (s_saveOpFrames < LIBRETRO_SAVESTATE_MAX_REFUSAL_FRAMES)
 				return;
 
 			// The engine's own wording when it gave one: "waiting for the
@@ -1747,7 +1753,7 @@ void retro_process_pending_savestate_op(void) {
 			if (retro_log_cb)
 				retro_log_cb(RETRO_LOG_WARN, "[scummvm] %s refused for %d frames, giving up: %s\n",
 				             s_pendingSaveOp == LIBRETRO_SAVEOP_SAVE ? "Save" : "Load",
-				             s_saveOpRefusals, busy);
+				             s_saveOpFrames, busy);
 			libretro_write_savestate_error(false, busy);
 			retro_osd_notification(busy, RETRO_LOG_WARN);
 			s_saveOpSucceeded = false;
@@ -1864,8 +1870,15 @@ static size_t libretro_estimate_savestate_size(void) {
 }
 
 size_t retro_serialize_size(void) {
+	// Not "0 because there is nothing to save yet". A frontend asks for the
+	// size before it will touch either serialize entry point, and RetroArch
+	// treats zero as "this core cannot do save states at all" -- so returning
+	// it while ScummVM is still in its launcher refuses the load that would
+	// have started the engine, which is exactly when a launch-with-state
+	// arrives. retro_unserialize() waits for the engine itself; report the
+	// size it will need so it gets the chance to.
 	if (!g_engine)
-		return 0;
+		return LIBRETRO_SAVESTATE_UNKNOWN_SIZE;
 	return libretro_estimate_savestate_size();
 }
 
@@ -1881,7 +1894,7 @@ bool retro_serialize(void *data, size_t size) {
 
 	s_pendingSaveOp = LIBRETRO_SAVEOP_SAVE;
 	s_saveOpArmed = false;
-	s_saveOpRefusals = 0;
+	s_saveOpFrames = 0;
 	libretro_clear_savestate_error();
 	s_saveOpSucceeded = false;
 	s_saveStateBytes.clear();
@@ -1892,7 +1905,7 @@ bool retro_serialize(void *data, size_t size) {
 	// Drive the emu thread forward (exactly as retro_run() does once per
 	// frame) until retro_process_pending_savestate_op(), called from
 	// pollEvent() on the emu thread, finishes the request.
-	for (int i = 0; s_pendingSaveOp != LIBRETRO_SAVEOP_NONE && i < LIBRETRO_SAVESTATE_MAX_SWITCHES; i++)
+	for (int i = 0; s_pendingSaveOp != LIBRETRO_SAVEOP_NONE && i < LIBRETRO_SAVESTATE_MAX_SWITCHES; i++, s_saveOpFrames++)
 		retro_switch_to_emu_thread();
 
 	if (s_pendingSaveOp != LIBRETRO_SAVEOP_NONE || !s_saveOpSucceeded)
@@ -1936,11 +1949,11 @@ bool retro_unserialize(const void *data, size_t size) {
 
 	s_pendingSaveOp = LIBRETRO_SAVEOP_LOAD;
 	s_saveOpArmed = false;
-	s_saveOpRefusals = 0;
+	s_saveOpFrames = 0;
 	libretro_clear_savestate_error();
 	s_saveOpSucceeded = false;
 
-	for (int i = 0; s_pendingSaveOp != LIBRETRO_SAVEOP_NONE && i < LIBRETRO_SAVESTATE_MAX_SWITCHES; i++)
+	for (int i = 0; s_pendingSaveOp != LIBRETRO_SAVEOP_NONE && i < LIBRETRO_SAVESTATE_MAX_SWITCHES; i++, s_saveOpFrames++)
 		retro_switch_to_emu_thread();
 
 	if (s_pendingSaveOp != LIBRETRO_SAVEOP_NONE) {
